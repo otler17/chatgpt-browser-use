@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chatgpt-browser-use"
+version = "1.0.0"
+description = "Drive ChatGPT (chatgpt.com) from a real browser session — designed for small local LLMs"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "Omar", email = "omar@example.com"}]
+keywords = ["chatgpt", "automation", "browser", "cdp", "llm", "local-llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+chatgpt = "chatgpt_browser_use.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,4 +1,4 @@
-name: Temporary YouTube WARP embedded JS probe
+name: Temporary YouTube exact download
 
 on:
   push:
@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  download:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Start Cloudflare WARP proxy
         shell: bash
@@ -36,9 +36,19 @@ jobs:
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
 
-      - name: Probe web_embedded formats with JS solver
+      - name: Download exact requested video
         shell: bash
         run: |
           set -euxo pipefail
           deno --version
-          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --remote-components ejs:github --js-runtimes deno --extractor-args 'youtube:player_client=web_embedded' -F 'https://www.youtube.com/watch?v=PtdI0KZRTLU'
+          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --remote-components ejs:github --js-runtimes deno --extractor-args 'youtube:player_client=web_embedded' --no-playlist -f 18 -o 'PtdI0KZRTLU.%(ext)s' 'https://www.youtube.com/watch?v=PtdI0KZRTLU'
+          test -s PtdI0KZRTLU.mp4
+          ls -lh PtdI0KZRTLU.mp4
+
+      - name: Upload exact video artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PtdI0KZRTLU-video
+          path: PtdI0KZRTLU.mp4
+          if-no-files-found: error
+          retention-days: 1

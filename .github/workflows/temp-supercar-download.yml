@@ -12,57 +12,59 @@ permissions:
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
-      - name: Install ffmpeg
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
       - name: Download public supercar stream
         shell: bash
         run: |
           set -euxo pipefail
           python3 - <<'PY'
-          import json, subprocess, urllib.request
+          import json, re, subprocess, urllib.request
 
-          ids = [
+          videos = [
               ('KidzSnnCJKU', 'POLICE vs SUPERCARS in Monaco!'),
               ('fMqTRIhfJXk', 'Real 4K HDR: TCL Supercars in HDR'),
           ]
-          bases = [
-              'https://pipedapi.adminforge.de',
-              'https://pipedapi.leptons.xyz',
-              'https://piped-api.privacy.com.de',
-              'https://pipedapi.kavin.rocks',
-          ]
-
           headers = {'User-Agent': 'Mozilla/5.0'}
-          for video_id, fallback_title in ids:
-              for base in bases:
+          with urllib.request.urlopen(urllib.request.Request('https://api.invidious.io/instances.json?sort_by=health', headers=headers), timeout=30) as r:
+              instances = json.load(r)
+
+          bases = []
+          for host, meta in instances:
+              if not isinstance(meta, dict) or not meta.get('api'):
+                  continue
+              uri = meta.get('uri') or ('https://' + host)
+              if uri.startswith('https://'):
+                  bases.append(uri.rstrip('/'))
+          print('API instances:', bases[:30], flush=True)
+
+          for video_id, fallback_title in videos:
+              for base in bases[:40]:
                   try:
-                      req = urllib.request.Request(f'{base}/streams/{video_id}', headers=headers)
-                      with urllib.request.urlopen(req, timeout=25) as r:
+                      req = urllib.request.Request(f'{base}/api/v1/videos/{video_id}', headers=headers)
+                      with urllib.request.urlopen(req, timeout=15) as r:
                           data = json.load(r)
-                      videos = [v for v in data.get('videoStreams', []) if v.get('url') and (v.get('height') or 0) <= 720]
-                      audios = [a for a in data.get('audioStreams', []) if a.get('url')]
-                      if not videos or not audios:
+                      streams = data.get('formatStreams') or []
+                      choices = []
+                      for s in streams:
+                          url = s.get('url')
+                          label = s.get('qualityLabel') or s.get('quality') or ''
+                          m = re.search(r'(\d+)', label)
+                          height = int(m.group(1)) if m else 0
+                          if url and height and height <= 720:
+                              choices.append((height, s))
+                      if not choices:
                           continue
-                      videos.sort(key=lambda v: (v.get('height') or 0, v.get('bitrate') or 0), reverse=True)
-                      audios.sort(key=lambda a: a.get('bitrate') or 0, reverse=True)
-                      vurl, aurl = videos[0]['url'], audios[0]['url']
-                      subprocess.run(['curl','-L','--fail','--retry','3','-o','video.part',vurl], check=True, timeout=300)
-                      subprocess.run(['curl','-L','--fail','--retry','3','-o','audio.part',aurl], check=True, timeout=300)
-                      subprocess.run(['ffmpeg','-y','-i','video.part','-i','audio.part','-c:v','copy','-c:a','aac','-movflags','+faststart','source.mp4'], check=True, timeout=300)
-                      title = data.get('title') or fallback_title
-                      open('source_title.txt','w').write(title + '\n')
+                      choices.sort(key=lambda x: x[0], reverse=True)
+                      stream = choices[0][1]
+                      subprocess.run(['curl','-L','--fail','--retry','3','--max-time','300','-o','source.mp4',stream['url']], check=True, timeout=330)
+                      subprocess.run(['ffprobe','-v','error','source.mp4'], check=True, timeout=30)
+                      open('source_title.txt','w').write((data.get('title') or fallback_title) + '\n')
                       open('source_url.txt','w').write(f'https://www.youtube.com/watch?v={video_id}\n')
                       raise SystemExit(0)
                   except Exception as e:
                       print(f'{base} / {video_id}: {e}', flush=True)
-          raise SystemExit('No public stream source succeeded')
+          raise SystemExit('No Invidious stream source succeeded')
           PY
           test -s source.mp4
           ls -lh source.mp4 source_url.txt source_title.txt

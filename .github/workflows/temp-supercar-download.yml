@@ -1,4 +1,4 @@
-name: Temporary YouTube WARP download
+name: Temporary YouTube WARP HLS download
 
 on:
   push:
@@ -28,20 +28,18 @@ jobs:
           done
           exit 1
 
-      - name: Install downloader and JS runtime
+      - name: Install yt-dlp and ffmpeg
         shell: bash
         run: |
           set -euxo pipefail
           python3 -m pip install --user -U --pre 'yt-dlp[default]'
-          curl -fsSL https://deno.land/install.sh | sh
-          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+          ffmpeg -version | head -n 1
 
-      - name: Download requested YouTube video
+      - name: Download requested YouTube HLS video
         shell: bash
         run: |
           set -euxo pipefail
-          deno --version
-          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --remote-components ejs:github --js-runtimes deno --no-playlist -f 'b[ext=mp4]/b' -o 'requested.%(ext)s' 'https://www.youtube.com/watch?v=PtdI0KZRTLU'
+          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --extractor-args 'youtube:player_client=web_safari' --no-playlist -f 'b[protocol=m3u8_native]/b[protocol=m3u8]' --merge-output-format mp4 -o 'requested.%(ext)s' 'https://www.youtube.com/watch?v=PtdI0KZRTLU'
           ls -lh requested.*
 
       - name: Upload requested video artifact

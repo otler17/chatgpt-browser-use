@@ -14,13 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Install current yt-dlp
+      - name: Install current yt-dlp and ffmpeg
         shell: bash
         run: |
           set -euxo pipefail
           curl -L --fail --retry 5 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
           chmod +x yt-dlp
           ./yt-dlp --version
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
           ffmpeg -version | head -n 1
 
       - name: Download a supercar video

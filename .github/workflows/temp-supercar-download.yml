@@ -1,4 +1,4 @@
-name: Temporary supercar video download
+name: Temporary YouTube availability test
 
 on:
   push:
@@ -10,28 +10,19 @@ permissions:
   contents: read
 
 jobs:
-  download-archive:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - name: Download archived YouTube supercar MP4
+      - name: Test requested video
         shell: bash
         run: |
           set -euxo pipefail
-          MEDIA='https://archive.ventilaar.net/videos/automatic/UCTGrgT-Ld4kH3CxHnCMGn8w/LUH2PFUROYA/when-honda-took-on-ferrari-and-won.mp4'
-          curl -L --fail --retry 5 --retry-all-errors -A 'Mozilla/5.0' "$MEDIA" -o source.mp4
-          test -s source.mp4
-          echo 'When Honda took on Ferrari and WON!' > source_title.txt
-          echo 'https://www.youtube.com/watch?v=LUH2PFUROYA' > source_url.txt
-          ls -lh source.mp4 source_title.txt source_url.txt
-
-      - name: Upload source artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: supercar-source
-          path: |
-            source.mp4
-            source_url.txt
-            source_title.txt
-          if-no-files-found: error
-          retention-days: 1
+          VIDEO_ID='PtdI0KZRTLU'
+          TARGET='https://www.youtube.com/watch?v=PtdI0KZRTLU'
+          curl -L --fail --retry 2 -A 'Mozilla/5.0' "https://www.youtube.com/oembed?url=${TARGET}&format=json" -o oembed.json || true
+          cat oembed.json || true
+          curl -L --fail --retry 2 -A 'Mozilla/5.0' "https://archive.ventilaar.net/watch?v=${VIDEO_ID}" -o archive.html || true
+          if [ -s archive.html ]; then
+            grep -Eio '.{0,120}(source src|mp4|webm|PtdI0KZRTLU).{0,200}' archive.html | head -n 30 || true
+          fi

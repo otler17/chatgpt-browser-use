@@ -1,4 +1,4 @@
-name: Temporary YouTube WARP format probe
+name: Temporary YouTube WARP embedded probe
 
 on:
   push:
@@ -28,9 +28,9 @@ jobs:
           done
           exit 1
 
-      - name: Probe android_vr formats
+      - name: Probe web_embedded formats
         shell: bash
         run: |
           set -euxo pipefail
           python3 -m pip install --user -U --pre 'yt-dlp[default]'
-          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --extractor-args 'youtube:player_client=android_vr' -F 'https://www.youtube.com/watch?v=PtdI0KZRTLU'
+          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --extractor-args 'youtube:player_client=web_embedded' -F 'https://www.youtube.com/watch?v=PtdI0KZRTLU'

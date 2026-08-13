@@ -14,64 +14,55 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Download public supercar stream
+      - name: Install current yt-dlp nightly
         shell: bash
         run: |
           set -euxo pipefail
-          python3 - <<'PY'
-          import json, os, re, subprocess, urllib.request
+          curl -L --fail --retry 5 https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp -o yt-dlp
+          chmod +x yt-dlp
+          ./yt-dlp --version
 
-          videos = [
-              ('KidzSnnCJKU', 'POLICE vs SUPERCARS in Monaco!'),
-              ('fMqTRIhfJXk', 'Real 4K HDR: TCL Supercars in HDR'),
-          ]
-          headers = {'User-Agent': 'Mozilla/5.0'}
-          with urllib.request.urlopen(urllib.request.Request('https://api.invidious.io/instances.json?sort_by=health', headers=headers), timeout=30) as r:
-              instances = json.load(r)
-
-          bases = []
-          for host, meta in instances:
-              if not isinstance(meta, dict) or not meta.get('api'):
-                  continue
-              uri = meta.get('uri') or ('https://' + host)
-              if uri.startswith('https://'):
-                  bases.append(uri.rstrip('/'))
-          print('API instances:', bases[:30], flush=True)
-
-          for video_id, fallback_title in videos:
-              for base in bases[:40]:
-                  try:
-                      req = urllib.request.Request(f'{base}/api/v1/videos/{video_id}', headers=headers)
-                      with urllib.request.urlopen(req, timeout=15) as r:
-                          data = json.load(r)
-                      streams = data.get('formatStreams') or []
-                      choices = []
-                      for s in streams:
-                          url = s.get('url')
-                          label = s.get('qualityLabel') or s.get('quality') or ''
-                          m = re.search(r'(\d+)', label)
-                          height = int(m.group(1)) if m else 0
-                          if url and height and height <= 720:
-                              choices.append((height, s))
-                      if not choices:
-                          continue
-                      choices.sort(key=lambda x: x[0], reverse=True)
-                      stream = choices[0][1]
-                      subprocess.run(['curl','-L','--fail','--retry','3','--max-time','300','-o','source.mp4',stream['url']], check=True, timeout=330)
-                      if os.path.getsize('source.mp4') < 100000:
-                          raise RuntimeError('downloaded file too small')
-                      with open('source.mp4','rb') as f:
-                          head = f.read(64)
-                      if b'ftyp' not in head:
-                          raise RuntimeError('download is not an MP4 container')
-                      open('source_title.txt','w').write((data.get('title') or fallback_title) + '\n')
-                      open('source_url.txt','w').write(f'https://www.youtube.com/watch?v={video_id}\n')
-                      raise SystemExit(0)
-                  except Exception as e:
-                      print(f'{base} / {video_id}: {e}', flush=True)
-          raise SystemExit('No Invidious stream source succeeded')
-          PY
+      - name: Download a public supercar video
+        shell: bash
+        run: |
+          set -euxo pipefail
+          urls=(
+            'https://www.youtube.com/watch?v=KidzSnnCJKU'
+          )
+          clients=(
+            'tv_simply'
+            'tv'
+            'web_embedded'
+            'ios'
+            'mweb'
+            'visionos'
+          )
+          rm -f source.mp4 source_url.txt source_title.txt
+          for url in "${urls[@]}"; do
+            for client in "${clients[@]}"; do
+              echo "Trying player client: $client"
+              rm -f source.mp4 source.mp4.part title.tmp
+              if ./yt-dlp \
+                --no-playlist \
+                --retries 3 \
+                --fragment-retries 3 \
+                --js-runtimes node \
+                --remote-components ejs:github \
+                --extractor-args "youtube:player_client=${client}" \
+                -f '18/b[ext=mp4][height<=480]/b[height<=720]' \
+                -o source.mp4 \
+                --print-to-file '%(title)s' title.tmp \
+                "$url"; then
+                if [ -s source.mp4 ]; then
+                  cp title.tmp source_title.txt
+                  echo "$url" > source_url.txt
+                  break 2
+                fi
+              fi
+            done
+          done
           test -s source.mp4
+          test -s source_url.txt
           ls -lh source.mp4 source_url.txt source_title.txt
 
       - name: Upload source artifact

@@ -10,60 +10,16 @@ permissions:
   contents: read
 
 jobs:
-  download:
+  inspect-archive:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - name: Install yt-dlp and automatic PO-token provider
+      - name: Inspect archived YouTube supercar page
         shell: bash
         run: |
           set -euxo pipefail
-          python3 -m pip install --upgrade yt-dlp bgutil-ytdlp-pot-provider
-          docker pull brainicism/bgutil-ytdlp-pot-provider:latest
-          docker run --name bgutil-provider -d -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider:latest
-          sleep 5
-          docker logs bgutil-provider || true
-
-      - name: Download a supercar video
-        shell: bash
-        run: |
-          set -euxo pipefail
-          urls=(
-            'https://www.youtube.com/watch?v=KidzSnnCJKU'
-            'https://www.youtube.com/watch?v=A8CLwaWTTbA'
-          )
-          rm -f source.mp4 source_url.txt source_title.txt title.tmp
-          for url in "${urls[@]}"; do
-            rm -f source.mp4 source.mp4.part title.tmp
-            if yt-dlp \
-              -v \
-              --no-playlist \
-              --retries 5 \
-              --fragment-retries 5 \
-              --js-runtimes node \
-              --extractor-args 'youtube:player_client=mweb;fetch_pot=always;pot_trace=true' \
-              -f '18/b[ext=mp4][height<=480]/b[height<=720]' \
-              -o source.mp4 \
-              --print-to-file '%(title)s' title.tmp \
-              "$url"; then
-              if [ -s source.mp4 ]; then
-                cp title.tmp source_title.txt
-                echo "$url" > source_url.txt
-                break
-              fi
-            fi
-          done
-          test -s source.mp4
-          test -s source_url.txt
-          ls -lh source.mp4 source_url.txt source_title.txt
-
-      - name: Upload source artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: supercar-source
-          path: |
-            source.mp4
-            source_url.txt
-            source_title.txt
-          if-no-files-found: error
-          retention-days: 1
+          curl -L --fail --retry 4 -A 'Mozilla/5.0' \
+            'https://archive.ventilaar.net/watch?v=LUH2PFUROYA' \
+            -o page.html
+          wc -c page.html
+          grep -Eio '.{0,160}(mp4|webm|video|source|download|LUH2PFUROYA).{0,240}' page.html | head -n 120 || true

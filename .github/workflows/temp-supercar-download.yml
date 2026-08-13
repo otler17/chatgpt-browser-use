@@ -1,4 +1,4 @@
-name: Temporary YouTube browser-token test
+name: Temporary YouTube WARP test
 
 on:
   push:
@@ -14,15 +14,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Install downloader and browser token provider
+      - name: Start Cloudflare WARP proxy
         shell: bash
         run: |
           set -euxo pipefail
-          python3 -m pip install --user -U --pre 'yt-dlp[default]' yt-dlp-getpot-wpc
-          chromium --version || google-chrome --version || true
-          python3 -m yt_dlp --version
-      - name: Probe requested public video
+          docker network create warp-net || true
+          docker run -d --name warp --network warp-net -p 1080:1080 --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv4.conf.all.src_valid_mark=1 caomingjun/warp
+          for i in {1..15}; do
+            RESULT=$(curl -s --max-time 4 --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace || true)
+            echo "$RESULT"
+            echo "$RESULT" | grep -qE 'warp=(on|plus)' && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Probe requested YouTube video through WARP
         shell: bash
         run: |
           set -euxo pipefail
-          python3 -m yt_dlp -v --skip-download --extractor-args 'youtube:player_client=mweb;youtubepot-wpc:browser_path=/usr/bin/chromium' 'https://www.youtube.com/watch?v=PtdI0KZRTLU'
+          python3 -m pip install --user -U --pre 'yt-dlp[default]'
+          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --skip-download --print '%(id)s|%(title)s|%(duration)s' 'https://www.youtube.com/watch?v=PtdI0KZRTLU'

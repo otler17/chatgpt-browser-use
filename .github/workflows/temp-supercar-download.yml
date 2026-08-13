@@ -12,56 +12,59 @@ permissions:
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Install current yt-dlp and ffmpeg
+      - name: Install ffmpeg
         shell: bash
         run: |
           set -euxo pipefail
-          curl -L --fail --retry 5 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
-          chmod +x yt-dlp
-          ./yt-dlp --version
-          if ! command -v ffmpeg >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ffmpeg
-          fi
-          ffmpeg -version | head -n 1
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
-      - name: Download a supercar video
+      - name: Download public supercar stream
         shell: bash
         run: |
           set -euxo pipefail
-          urls=(
-            'https://www.youtube.com/watch?v=fMqTRIhfJXk'
-            'https://www.youtube.com/watch?v=C74Hq3HVD0Y'
-            'https://www.youtube.com/watch?v=KidzSnnCJKU'
-          )
-          rm -f source.mp4 source_url.txt source_title.txt
-          for url in "${urls[@]}"; do
-            rm -f source.mp4 source.mp4.part source.webm source.mkv
-            if ./yt-dlp \
-              --no-playlist \
-              --retries 5 \
-              --fragment-retries 5 \
-              --js-runtimes node \
-              --remote-components ejs:github \
-              -f 'bv*[height<=720]+ba/b[height<=720]' \
-              --merge-output-format mp4 \
-              -o 'source.%(ext)s' \
-              --print-to-file '%(title)s' source_title.txt \
-              "$url"; then
-              candidate=$(find . -maxdepth 1 -type f \( -name 'source.mp4' -o -name 'source.webm' -o -name 'source.mkv' \) | head -n 1)
-              if [ -n "$candidate" ] && [ -s "$candidate" ]; then
-                if [ "$candidate" != './source.mp4' ]; then
-                  ffmpeg -y -i "$candidate" -c copy source.mp4 || ffmpeg -y -i "$candidate" -c:v libx264 -preset veryfast -crf 23 -c:a aac source.mp4
-                fi
-                echo "$url" > source_url.txt
-                break
-              fi
-            fi
-          done
+          python3 - <<'PY'
+          import json, subprocess, urllib.request
+
+          ids = [
+              ('KidzSnnCJKU', 'POLICE vs SUPERCARS in Monaco!'),
+              ('fMqTRIhfJXk', 'Real 4K HDR: TCL Supercars in HDR'),
+          ]
+          bases = [
+              'https://pipedapi.adminforge.de',
+              'https://pipedapi.leptons.xyz',
+              'https://piped-api.privacy.com.de',
+              'https://pipedapi.kavin.rocks',
+          ]
+
+          headers = {'User-Agent': 'Mozilla/5.0'}
+          for video_id, fallback_title in ids:
+              for base in bases:
+                  try:
+                      req = urllib.request.Request(f'{base}/streams/{video_id}', headers=headers)
+                      with urllib.request.urlopen(req, timeout=25) as r:
+                          data = json.load(r)
+                      videos = [v for v in data.get('videoStreams', []) if v.get('url') and (v.get('height') or 0) <= 720]
+                      audios = [a for a in data.get('audioStreams', []) if a.get('url')]
+                      if not videos or not audios:
+                          continue
+                      videos.sort(key=lambda v: (v.get('height') or 0, v.get('bitrate') or 0), reverse=True)
+                      audios.sort(key=lambda a: a.get('bitrate') or 0, reverse=True)
+                      vurl, aurl = videos[0]['url'], audios[0]['url']
+                      subprocess.run(['curl','-L','--fail','--retry','3','-o','video.part',vurl], check=True, timeout=300)
+                      subprocess.run(['curl','-L','--fail','--retry','3','-o','audio.part',aurl], check=True, timeout=300)
+                      subprocess.run(['ffmpeg','-y','-i','video.part','-i','audio.part','-c:v','copy','-c:a','aac','-movflags','+faststart','source.mp4'], check=True, timeout=300)
+                      title = data.get('title') or fallback_title
+                      open('source_title.txt','w').write(title + '\n')
+                      open('source_url.txt','w').write(f'https://www.youtube.com/watch?v={video_id}\n')
+                      raise SystemExit(0)
+                  except Exception as e:
+                      print(f'{base} / {video_id}: {e}', flush=True)
+          raise SystemExit('No public stream source succeeded')
+          PY
           test -s source.mp4
-          test -s source_url.txt
           ls -lh source.mp4 source_url.txt source_title.txt
 
       - name: Upload source artifact

@@ -12,54 +12,47 @@ permissions:
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Install current yt-dlp nightly
+      - name: Install yt-dlp and automatic PO-token provider
         shell: bash
         run: |
           set -euxo pipefail
-          curl -L --fail --retry 5 https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp -o yt-dlp
-          chmod +x yt-dlp
-          ./yt-dlp --version
+          python3 -m pip install --upgrade yt-dlp bgutil-ytdlp-pot-provider
+          yt-dlp --version
+          docker pull brainicism/bgutil-ytdlp-pot-provider:latest
+          docker run --name bgutil-provider -d -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider:latest
+          sleep 6
+          docker logs bgutil-provider || true
 
-      - name: Download a public supercar video
+      - name: Download a supercar video
         shell: bash
         run: |
           set -euxo pipefail
           urls=(
             'https://www.youtube.com/watch?v=KidzSnnCJKU'
+            'https://www.youtube.com/watch?v=A8CLwaWTTbA'
           )
-          clients=(
-            'tv_simply'
-            'tv'
-            'web_embedded'
-            'ios'
-            'mweb'
-            'visionos'
-          )
-          rm -f source.mp4 source_url.txt source_title.txt
+          rm -f source.mp4 source_url.txt source_title.txt title.tmp
           for url in "${urls[@]}"; do
-            for client in "${clients[@]}"; do
-              echo "Trying player client: $client"
-              rm -f source.mp4 source.mp4.part title.tmp
-              if ./yt-dlp \
-                --no-playlist \
-                --retries 3 \
-                --fragment-retries 3 \
-                --js-runtimes node \
-                --remote-components ejs:github \
-                --extractor-args "youtube:player_client=${client}" \
-                -f '18/b[ext=mp4][height<=480]/b[height<=720]' \
-                -o source.mp4 \
-                --print-to-file '%(title)s' title.tmp \
-                "$url"; then
-                if [ -s source.mp4 ]; then
-                  cp title.tmp source_title.txt
-                  echo "$url" > source_url.txt
-                  break 2
-                fi
+            rm -f source.mp4 source.mp4.part title.tmp
+            if yt-dlp \
+              -v \
+              --no-playlist \
+              --retries 5 \
+              --fragment-retries 5 \
+              --js-runtimes node \
+              --extractor-args 'youtube:player_client=mweb' \
+              -f '18/b[ext=mp4][height<=480]/b[height<=720]' \
+              -o source.mp4 \
+              --print-to-file '%(title)s' title.tmp \
+              "$url"; then
+              if [ -s source.mp4 ]; then
+                cp title.tmp source_title.txt
+                echo "$url" > source_url.txt
+                break
               fi
-            done
+            fi
           done
           test -s source.mp4
           test -s source_url.txt

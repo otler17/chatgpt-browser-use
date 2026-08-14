@@ -29,42 +29,38 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
 
       - name: Compile plugin and package MinGW runtime DLLs
-        shell: pwsh
+        shell: msys2 {0}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $gpp = 'C:\msys64\ucrt64\bin\g++.exe'
-          if (-not (Test-Path $gpp)) { throw "MinGW compiler missing: $gpp" }
-          New-Item -ItemType Directory -Force native | Out-Null
-          @'
+          set -euo pipefail
+          mkdir -p native
+          cat > probe.cpp <<'CPP'
           #include <string>
           extern "C" __declspec(dllexport) int astral_probe() {
               std::string value = "astral";
               return static_cast<int>(value.size());
           }
-          '@ | Set-Content -Encoding utf8 probe.cpp
-          & $gpp -shared -std=c++17 probe.cpp -o native\probe.dll
-          if ($LASTEXITCODE -ne 0) { throw 'MinGW build failed' }
+          CPP
+          g++ -shared -std=c++17 probe.cpp -o native/probe.dll
 
-          $runtimeNames = @(
-            'libstdc++-6.dll',
-            'libgcc_s_seh-1.dll',
-            'libgcc_s_dw2-1.dll',
-            'libgcc_s_sjlj-1.dll',
-            'libwinpthread-1.dll'
-          )
-          foreach ($name in $runtimeNames) {
-            $candidate = (& $gpp "-print-file-name=$name").Trim()
-            if ($candidate -and $candidate -ne $name -and (Test-Path $candidate)) {
-              Copy-Item -Force $candidate native\
-            }
-          }
-          Get-ChildItem native | Format-Table Name,Length
-          if (-not (Test-Path native\libstdc++-6.dll)) { throw 'libstdc++-6.dll was not packaged' }
+          for name in \
+            libstdc++-6.dll \
+            libgcc_s_seh-1.dll \
+            libgcc_s_dw2-1.dll \
+            libgcc_s_sjlj-1.dll \
+            libwinpthread-1.dll
+          do
+            candidate="$(g++ -print-file-name="$name")"
+            if [[ -n "$candidate" && "$candidate" != "$name" && -f "$candidate" ]]; then
+              cp -f "$candidate" native/
+            fi
+          done
+          ls -lh native
+          test -f native/libstdc++-6.dll
 
       - name: Exercise Python Windows DLL search bridge
-        shell: pwsh
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
+          set -euo pipefail
           python - <<'PY'
           import ctypes
           import os
@@ -87,9 +83,9 @@ jobs:
           PY
 
       - name: Exercise scoped static import-policy fix
-        shell: pwsh
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
+          set -euo pipefail
           python - <<'PY'
           import ast
           import hashlib
@@ -129,7 +125,8 @@ jobs:
               engineer = root / 'src' / 'demo' / 'algorithm.py'
               engineer.parent.mkdir(parents=True)
               engineer.write_text('import os\n', encoding='utf-8')
-              violations = [module for module, _ in roots(engineer.read_text(encoding='utf-8')) if module not in (base | {'demo'})]
+              engineer_allowed = APPROVED_STDLIB_IMPORTS | APPROVED_ASTRAL_IMPORTS | {'demo'}
+              violations = [module for module, _ in roots(engineer.read_text(encoding='utf-8')) if module not in engineer_allowed]
               assert violations == ['os']
               print('generated runtime os import accepted; engineer os import remains rejected')
           PY

@@ -1,0 +1,35 @@
+name: Temporary Farbi portable PostgreSQL
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/farbi-portable-postgres.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Build portable PostgreSQL 16
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd /tmp
+          curl -fsSLO https://ftp.postgresql.org/pub/source/v16.9/postgresql-16.9.tar.bz2
+          tar -xjf postgresql-16.9.tar.bz2
+          cd postgresql-16.9
+          ./configure --prefix=/tmp/pgportable --without-readline --without-zlib --without-icu
+          make -j2 world-bin
+          make install
+          /tmp/pgportable/bin/postgres --version
+          tar -C /tmp -czf /tmp/farbi-postgres16-portable.tar.gz pgportable
+      - uses: actions/upload-artifact@v4
+        with:
+          name: farbi-postgres16-portable
+          path: /tmp/farbi-postgres16-portable.tar.gz
+          if-no-files-found: error
+          retention-days: 1

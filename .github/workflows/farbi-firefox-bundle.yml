@@ -1,0 +1,32 @@
+name: Temporary FARBI portable Firefox
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/farbi-firefox-bundle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download portable Firefox
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd /tmp
+          curl -L --fail --retry 3 'https://download.mozilla.org/?product=firefox-latest&os=linux64&lang=en-US' -o firefox.tar.xz
+          mkdir firefox-portable
+          tar -xJf firefox.tar.xz -C firefox-portable --strip-components=1
+          /tmp/firefox-portable/firefox --version
+          tar -C /tmp -czf /tmp/farbi-firefox-portable.tar.gz firefox-portable
+      - uses: actions/upload-artifact@v4
+        with:
+          name: farbi-firefox-portable
+          path: /tmp/farbi-firefox-portable.tar.gz
+          if-no-files-found: error
+          retention-days: 1

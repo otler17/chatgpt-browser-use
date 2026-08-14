@@ -1,0 +1,29 @@
+name: Temporary FARBI Tailwind mirror
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/farbi-tailwind-mirror.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download Tailwind CDN runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/farbi-cdn
+          curl -L --fail --retry 3 https://cdn.tailwindcss.com -o /tmp/farbi-cdn/tailwind.js
+          wc -c /tmp/farbi-cdn/tailwind.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: farbi-tailwind-cdn
+          path: /tmp/farbi-cdn/tailwind.js
+          if-no-files-found: error
+          retention-days: 1

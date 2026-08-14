@@ -1,4 +1,4 @@
-name: Temporary YouTube subtitle fetch
+name: Temporary YouTube caption JSON fetch
 
 on:
   push:
@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  download:
+  fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - name: Start Cloudflare WARP proxy
         shell: bash
@@ -28,39 +28,40 @@ jobs:
           done
           exit 1
 
-      - name: Install yt-dlp, curl-cffi and Deno
+      - name: Fetch timedtext JSON with browser impersonation
         shell: bash
+        env:
+          CAPTION_URL: "https://www.youtube.com/api/timedtext?v=3NEgiENoDfU&ei=en1_aqKzI7PZsfIPjorKoQc&caps=asr&opi=112496729&exp=xpo%2Cxwmhp&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1786765290&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cexp%2Cxoaf&signature=9273488241782EEA9F5D370C006A76B420C2FA04.F0E0C41DEF0E4C70448ACF96CFF4F4C43BC51B5B&key=yt8&kind=asr&lang=ar&fmt=json3"
         run: |
           set -euxo pipefail
-          python3 -m pip install --user -U --pre 'yt-dlp[default]' curl_cffi
-          curl -fsSL https://deno.land/install.sh | sh
-          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+          python3 -m pip install --user -U curl_cffi
+          python3 - <<'PY'
+          import os, sys
+          from curl_cffi import requests
+          url=os.environ['CAPTION_URL']
+          attempts=[
+            ('chrome', {'https':'socks5h://127.0.0.1:1080'}),
+            ('safari', {'https':'socks5h://127.0.0.1:1080'}),
+            ('chrome', None),
+          ]
+          for imp, proxies in attempts:
+            try:
+              r=requests.get(url, impersonate=imp, proxies=proxies, timeout=30)
+              print('attempt', imp, bool(proxies), r.status_code, len(r.content), r.headers.get('content-type'))
+              if r.status_code == 200 and len(r.content) > 100:
+                open('3NEgiENoDfU.ar-orig.json3','wb').write(r.content)
+                sys.exit(0)
+            except Exception as e:
+              print('error', imp, bool(proxies), repr(e))
+          sys.exit(1)
+          PY
+          python3 -m json.tool 3NEgiENoDfU.ar-orig.json3 >/dev/null
+          ls -lh 3NEgiENoDfU.ar-orig.json3
 
-      - name: Fetch Arabic subtitles
-        shell: bash
-        run: |
-          set -euxo pipefail
-          deno --version
-          python3 -m yt_dlp \
-            --proxy 'socks5://127.0.0.1:1080' \
-            --remote-components ejs:github \
-            --js-runtimes deno \
-            --extractor-args 'youtube:player_client=web_embedded' \
-            --impersonate chrome \
-            --no-playlist \
-            --skip-download \
-            --write-info-json \
-            --write-auto-subs \
-            --sub-langs 'ar-orig' \
-            --sub-format json3 \
-            -o '3NEgiENoDfU.%(ext)s' \
-            'https://www.youtube.com/watch?v=3NEgiENoDfU'
-          ls -lh 3NEgiENoDfU.*
-
-      - name: Upload subtitle artifact
+      - name: Upload caption artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 3NEgiENoDfU-subtitles
-          path: 3NEgiENoDfU.*
+          name: 3NEgiENoDfU-caption-json
+          path: 3NEgiENoDfU.ar-orig.json3
           if-no-files-found: error
           retention-days: 1

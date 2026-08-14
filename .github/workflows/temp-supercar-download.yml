@@ -1,4 +1,4 @@
-name: Temporary YouTube transcript fetch
+name: Temporary YouTube exact download
 
 on:
   push:
@@ -36,7 +36,7 @@ jobs:
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
 
-      - name: Fetch metadata and subtitles
+      - name: Download exact requested video
         shell: bash
         run: |
           set -euxo pipefail
@@ -47,19 +47,16 @@ jobs:
             --js-runtimes deno \
             --extractor-args 'youtube:player_client=web_embedded' \
             --no-playlist \
-            --skip-download \
             --write-info-json \
-            --write-auto-subs \
-            --sub-langs 'en.*,en' \
-            --sub-format vtt \
+            -f '18' \
             -o '3NEgiENoDfU.%(ext)s' \
             'https://www.youtube.com/watch?v=3NEgiENoDfU'
           ls -lh 3NEgiENoDfU.*
 
-      - name: Upload transcript artifact
+      - name: Upload exact video artifact
         uses: actions/upload-artifact@v4
         with:
-          name: 3NEgiENoDfU-transcript
+          name: 3NEgiENoDfU-video
           path: 3NEgiENoDfU.*
           if-no-files-found: error
           retention-days: 1

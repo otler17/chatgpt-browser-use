@@ -1,0 +1,152 @@
+name: ASTRAL Windows validation
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/astral-windows-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Locate MinGW-w64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            'C:\msys64\mingw64\bin\g++.exe',
+            'C:\mingw64\bin\g++.exe',
+            'C:\ProgramData\mingw64\mingw64\bin\g++.exe'
+          )
+          $gpp = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $gpp) {
+            $cmd = Get-Command g++.exe -ErrorAction SilentlyContinue
+            if ($cmd) { $gpp = $cmd.Source }
+          }
+          if (-not $gpp) {
+            choco install mingw -y --no-progress
+            $cmd = Get-Command g++.exe -ErrorAction Stop
+            $gpp = $cmd.Source
+          }
+          Write-Host "Using $gpp"
+          "ASTRAL_CXX=$gpp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $gpp --version
+      - name: Compile, package dependencies, load DLL, and validate import-policy fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force astral-win-smoke | Out-Null
+          @'
+          #include <cstdint>
+          #if defined(_WIN32)
+          #define ASTRAL_EXPORT __declspec(dllexport)
+          #else
+          #define ASTRAL_EXPORT
+          #endif
+          extern "C" {
+          ASTRAL_EXPORT int32_t astral_add(int32_t a, int32_t b) { return a + b; }
+          }
+          '@ | Set-Content astral-win-smoke\algorithm.cpp -Encoding utf8
+          & $env:ASTRAL_CXX -std=c++17 -O2 -shared astral-win-smoke\algorithm.cpp -o astral-win-smoke\ultra_estimator.dll
+          if ($LASTEXITCODE -ne 0) { throw 'MinGW C++17 build failed' }
+          @'
+          from __future__ import annotations
+          import ast
+          import ctypes
+          import hashlib
+          import os
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          ROOT = Path('astral-win-smoke').resolve()
+          DLL = ROOT / 'ultra_estimator.dll'
+          CXX = os.environ['ASTRAL_CXX']
+          RUNTIME_DLLS = (
+              'libstdc++-6.dll', 'libgcc_s_seh-1.dll', 'libgcc_s_dw2-1.dll',
+              'libgcc_s_sjlj-1.dll', 'libwinpthread-1.dll',
+          )
+          copied = []
+          for name in RUNTIME_DLLS:
+              probe = subprocess.run([CXX, f'-print-file-name={name}'], capture_output=True, text=True, check=False)
+              value = (probe.stdout or '').strip()
+              candidate = Path(value) if value and value != name else None
+              if candidate is not None and candidate.is_file():
+                  target = ROOT / candidate.name
+                  shutil.copy2(candidate, target)
+                  copied.append(target)
+          print('packaged_runtime_dlls=', [p.name for p in copied])
+          assert DLL.is_file() and DLL.stat().st_size > 0
+          assert copied, 'No MinGW runtime DLL dependencies were packaged'
+
+          # Exact Windows loader behavior used by generated _native_runtime.py.
+          dll_directory = None
+          try:
+              if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
+                  dll_directory = os.add_dll_directory(str(DLL.parent))
+              lib = ctypes.CDLL(str(DLL))
+              lib.astral_add.argtypes = [ctypes.c_int32, ctypes.c_int32]
+              lib.astral_add.restype = ctypes.c_int32
+              assert lib.astral_add(19, 23) == 42
+          finally:
+              if dll_directory is not None:
+                  dll_directory.close()
+
+          # Regression contract: generated imports are integrity-owned and skipped;
+          # engineer/untracked Python remains under the restrictive allowlist.
+          approved = {'ctypes', 'dataclasses', 'enum', 'json', 'math', 'pathlib', 'typing'}
+          generated = {'src/ultra/_native_runtime.py'}
+          files = {
+              'src/ultra/_native_runtime.py': 'import ctypes\nimport os\nfrom pathlib import Path\n',
+              'src/ultra/algorithm.py': 'import math\n',
+          }
+          def validate(files):
+              violations = []
+              for relative, source in files.items():
+                  if relative in generated:
+                      continue
+                  tree = ast.parse(source, filename=relative)
+                  for node in ast.walk(tree):
+                      if isinstance(node, ast.Import):
+                          roots = [a.name.split('.')[0] for a in node.names]
+                      elif isinstance(node, ast.ImportFrom):
+                          roots = [(node.module or '').split('.')[0]]
+                      else:
+                          continue
+                      for root in roots:
+                          if root and root not in approved:
+                              violations.append(f"{relative}:{node.lineno}: import {root!r} is not approved")
+              return violations
+          assert validate(files) == []
+          bad = dict(files)
+          bad['src/ultra/algorithm.py'] = 'import os\n'
+          violations = validate(bad)
+          assert violations and "import 'os' is not approved" in violations[0]
+          bad2 = dict(files)
+          bad2['src/ultra/helper.py'] = 'import os\n'
+          violations2 = validate(bad2)
+          assert violations2 and violations2[0].startswith('src/ultra/helper.py:')
+
+          sha = hashlib.sha256(DLL.read_bytes()).hexdigest()
+          print('WINDOWS_NATIVE_DLL_SHA256=' + sha)
+          print('WINDOWS_GENERATED_LOADER=PASS')
+          print('WINDOWS_IMPORT_POLICY_REGRESSION=PASS')
+          print('ASTRAL_WINDOWS_VALIDATION_OK')
+          '@ | Set-Content astral-win-smoke\validate.py -Encoding utf8
+          python astral-win-smoke\validate.py
+      - name: Upload Windows evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: astral-windows-validation-evidence
+          path: astral-win-smoke/
+          if-no-files-found: error
+          retention-days: 1

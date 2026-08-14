@@ -41,14 +41,14 @@ jobs:
         run: |
           set -euxo pipefail
           deno --version
-          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --remote-components ejs:github --js-runtimes deno --extractor-args 'youtube:player_client=web_embedded' --no-playlist -f 18 -o 'PtdI0KZRTLU.%(ext)s' 'https://www.youtube.com/watch?v=PtdI0KZRTLU'
-          test -s PtdI0KZRTLU.mp4
-          ls -lh PtdI0KZRTLU.mp4
+          python3 -m yt_dlp --proxy 'socks5://127.0.0.1:1080' --remote-components ejs:github --js-runtimes deno --extractor-args 'youtube:player_client=web_embedded' --no-playlist -f 18 -o 'prtlfPqQ-FI.%(ext)s' 'https://www.youtube.com/watch?v=prtlfPqQ-FI'
+          test -s prtlfPqQ-FI.mp4
+          ls -lh prtlfPqQ-FI.mp4
 
       - name: Upload exact video artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PtdI0KZRTLU-video
-          path: PtdI0KZRTLU.mp4
+          name: prtlfPqQ-FI-video
+          path: prtlfPqQ-FI.mp4
           if-no-files-found: error
           retention-days: 1

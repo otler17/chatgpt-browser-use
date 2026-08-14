@@ -1,0 +1,184 @@
+name: Temporary ASTRAL Windows native estimator E2E
+
+on:
+  push:
+    branches: [astral-windows-native-e2e-20260814]
+    paths:
+      - '.github/workflows/temp-astral-windows-native-e2e.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-native-e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [mingw, msvc]
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Configure MSVC
+        if: matrix.toolchain == 'msvc'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Exercise static policy, native build, dependency load, and isolated worker
+        shell: pwsh
+        env:
+          ASTRAL_TOOLCHAIN: ${{ matrix.toolchain }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path astral-win-e2e | Out-Null
+          Set-Location astral-win-e2e
+
+          @'
+          import ast
+
+          APPROVED = {
+              '__future__', 'collections', 'ctypes', 'dataclasses', 'decimal',
+              'enum', 'fractions', 'functools', 'hashlib', 'itertools', 'json',
+              'math', 'numbers', 'operator', 'pathlib', 'statistics', 'time',
+              'types', 'typing', 'astral_contracts', 'astral_algorithm_sdk', 'demo'
+          }
+          generated = {'src/demo/_native_runtime.py'}
+          sources = {
+              'src/demo/_native_runtime.py': 'import ctypes\nimport os\nfrom pathlib import Path\n',
+              'src/demo/engineer_ok.py': 'import math\n',
+          }
+
+          def import_roots(text):
+              tree = ast.parse(text)
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          yield alias.name.split('.', 1)[0]
+                  elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                      yield node.module.split('.', 1)[0]
+
+          violations = []
+          for path, text in sources.items():
+              if path in generated:
+                  continue
+              for module in import_roots(text):
+                  if module not in APPROVED:
+                      violations.append((path, module))
+          assert violations == [], violations
+
+          bad = 'import os\n'
+          bad_violations = [m for m in import_roots(bad) if m not in APPROVED]
+          assert bad_violations == ['os'], bad_violations
+          print('STATIC_IMPORT_POLICY_OK')
+          '@ | Set-Content -Encoding UTF8 static_policy.py
+          python static_policy.py
+
+          @'
+          #include <string>
+          #if defined(_WIN32)
+          #define ASTRAL_EXPORT __declspec(dllexport)
+          #else
+          #define ASTRAL_EXPORT
+          #endif
+          extern "C" ASTRAL_EXPORT int astral_probe(int value) {
+              std::string marker = "astral";
+              return value + static_cast<int>(marker.size());
+          }
+          '@ | Set-Content -Encoding UTF8 probe.cpp
+
+          if ($env:ASTRAL_TOOLCHAIN -eq 'mingw') {
+            $gpp = 'C:\msys64\mingw64\bin\g++.exe'
+            if (-not (Test-Path $gpp)) {
+              choco install mingw -y --no-progress
+              $cmd = Get-Command g++.exe -ErrorAction Stop
+              $gpp = $cmd.Source
+            }
+            & $gpp -std=c++17 -O2 -shared probe.cpp -o probe.dll
+            if ($LASTEXITCODE -ne 0) { throw "MinGW build failed with $LASTEXITCODE" }
+            foreach ($name in @('libstdc++-6.dll','libgcc_s_seh-1.dll','libgcc_s_dw2-1.dll','libgcc_s_sjlj-1.dll','libwinpthread-1.dll')) {
+              $resolved = (& $gpp "-print-file-name=$name" | Select-Object -First 1).Trim()
+              if ($resolved -and $resolved -ne $name -and (Test-Path $resolved)) {
+                Copy-Item -Force $resolved .
+              }
+            }
+            $compiler = $gpp
+          } else {
+            $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+            & $cl /nologo /std:c++17 /EHsc /LD probe.cpp /Fe:probe.dll
+            if ($LASTEXITCODE -ne 0) { throw "MSVC build failed with $LASTEXITCODE" }
+            $compiler = $cl
+          }
+
+          @'
+          import ctypes
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          dll = Path('probe.dll').resolve()
+          assert dll.is_file(), dll
+          handle = None
+          try:
+              if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
+                  handle = os.add_dll_directory(str(dll.parent))
+              lib = ctypes.CDLL(str(dll))
+              lib.astral_probe.argtypes = [ctypes.c_int]
+              lib.astral_probe.restype = ctypes.c_int
+              assert lib.astral_probe(36) == 42
+          finally:
+              if handle is not None:
+                  handle.close()
+
+          child = r'''
+          import ctypes, os, sys
+          from pathlib import Path
+          p = Path(sys.argv[1]).resolve()
+          h = os.add_dll_directory(str(p.parent)) if hasattr(os, 'add_dll_directory') else None
+          try:
+              lib = ctypes.CDLL(str(p))
+              lib.astral_probe.argtypes=[ctypes.c_int]
+              lib.astral_probe.restype=ctypes.c_int
+              assert lib.astral_probe(36) == 42
+              print('ISOLATED_DLL_LOAD_OK')
+          finally:
+              if h is not None: h.close()
+          '''
+          run = subprocess.run([sys.executable, '-c', child, str(dll)], cwd=str(dll.parent), capture_output=True, text=True)
+          print(run.stdout)
+          print(run.stderr, file=sys.stderr)
+          assert run.returncode == 0, run.returncode
+          print('WINDOWS_NATIVE_DLL_E2E_OK')
+          print(json.dumps({'python': sys.version, 'dlls': sorted(p.name for p in dll.parent.glob('*.dll'))}, indent=2))
+          '@ | Set-Content -Encoding UTF8 load_probe.py
+          python load_probe.py | Tee-Object -FilePath result.txt
+
+          $dlls = Get-ChildItem *.dll | Select-Object -ExpandProperty Name
+          [ordered]@{
+            status = 'PASS'
+            toolchain = $env:ASTRAL_TOOLCHAIN
+            compiler = $compiler
+            dlls = $dlls
+            python = (python --version)
+          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 result.json
+
+      - name: Upload Windows evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: astral-windows-native-${{ matrix.toolchain }}
+          path: |
+            astral-win-e2e/result.json
+            astral-win-e2e/result.txt
+            astral-win-e2e/probe.dll
+            astral-win-e2e/*.dll
+          if-no-files-found: error
+          retention-days: 1

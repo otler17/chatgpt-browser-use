@@ -50,16 +50,16 @@ jobs:
             --skip-download \
             --write-info-json \
             --write-auto-subs \
-            --sub-langs 'en.*' \
+            --sub-langs 'en.*,en' \
             --sub-format vtt \
-            -o 'prtlfPqQ-FI.%(ext)s' \
-            'https://www.youtube.com/watch?v=prtlfPqQ-FI'
-          ls -lh prtlfPqQ-FI.*
+            -o '3NEgiENoDfU.%(ext)s' \
+            'https://www.youtube.com/watch?v=3NEgiENoDfU'
+          ls -lh 3NEgiENoDfU.*
 
       - name: Upload transcript artifact
         uses: actions/upload-artifact@v4
         with:
-          name: prtlfPqQ-FI-transcript
-          path: prtlfPqQ-FI.*
+          name: 3NEgiENoDfU-transcript
+          path: 3NEgiENoDfU.*
           if-no-files-found: error
           retention-days: 1

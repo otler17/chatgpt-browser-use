@@ -1,0 +1,135 @@
+name: ASTRAL Windows MinGW validation
+
+on:
+  push:
+    branches: [astral-windows-validation-20260814]
+    paths:
+      - '.github/workflows/astral-windows-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-mingw:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install MinGW-w64 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+
+      - name: Compile plugin and package MinGW runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gpp = 'C:\msys64\ucrt64\bin\g++.exe'
+          if (-not (Test-Path $gpp)) { throw "MinGW compiler missing: $gpp" }
+          New-Item -ItemType Directory -Force native | Out-Null
+          @'
+          #include <string>
+          extern "C" __declspec(dllexport) int astral_probe() {
+              std::string value = "astral";
+              return static_cast<int>(value.size());
+          }
+          '@ | Set-Content -Encoding utf8 probe.cpp
+          & $gpp -shared -std=c++17 probe.cpp -o native\probe.dll
+          if ($LASTEXITCODE -ne 0) { throw 'MinGW build failed' }
+
+          $runtimeNames = @(
+            'libstdc++-6.dll',
+            'libgcc_s_seh-1.dll',
+            'libgcc_s_dw2-1.dll',
+            'libgcc_s_sjlj-1.dll',
+            'libwinpthread-1.dll'
+          )
+          foreach ($name in $runtimeNames) {
+            $candidate = (& $gpp "-print-file-name=$name").Trim()
+            if ($candidate -and $candidate -ne $name -and (Test-Path $candidate)) {
+              Copy-Item -Force $candidate native\
+            }
+          }
+          Get-ChildItem native | Format-Table Name,Length
+          if (-not (Test-Path native\libstdc++-6.dll)) { throw 'libstdc++-6.dll was not packaged' }
+
+      - name: Exercise Python Windows DLL search bridge
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python - <<'PY'
+          import ctypes
+          import os
+          from pathlib import Path
+
+          path = (Path('native') / 'probe.dll').resolve()
+          dll_directory = None
+          try:
+              if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
+                  dll_directory = os.add_dll_directory(str(path.parent))
+              lib = ctypes.CDLL(str(path))
+          finally:
+              if dll_directory is not None:
+                  dll_directory.close()
+          lib.astral_probe.argtypes = []
+          lib.astral_probe.restype = ctypes.c_int
+          value = lib.astral_probe()
+          print('astral_probe=', value)
+          assert value == 6
+          PY
+
+      - name: Exercise scoped static import-policy fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python - <<'PY'
+          import ast
+          import hashlib
+          from pathlib import Path
+          import tempfile
+
+          APPROVED_STDLIB_IMPORTS = frozenset({
+              '__future__', 'collections', 'ctypes', 'dataclasses', 'decimal',
+              'enum', 'fractions', 'functools', 'hashlib', 'itertools', 'json',
+              'math', 'numbers', 'operator', 'pathlib', 'statistics', 'time',
+              'types', 'typing',
+          })
+          APPROVED_ASTRAL_IMPORTS = frozenset({'astral_contracts', 'astral_algorithm_sdk'})
+          APPROVED_NATIVE_RUNTIME_IMPORTS = frozenset({'os'})
+
+          def roots(text):
+              tree = ast.parse(text)
+              out = []
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      out.extend((a.name.split('.', 1)[0], node.lineno) for a in node.names)
+                  elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                      out.append((node.module.split('.', 1)[0], node.lineno))
+              return out
+
+          with tempfile.TemporaryDirectory() as td:
+              root = Path(td)
+              runtime = root / 'src' / 'ultra' / '_native_runtime.py'
+              runtime.parent.mkdir(parents=True)
+              runtime.write_text('import ctypes\nimport os\nfrom pathlib import Path\n', encoding='utf-8')
+              expected_sha = hashlib.sha256(runtime.read_bytes()).hexdigest()
+              base = APPROVED_STDLIB_IMPORTS | APPROVED_ASTRAL_IMPORTS | {'ultra'}
+              file_allowed = base | APPROVED_NATIVE_RUNTIME_IMPORTS
+              assert all(module in file_allowed for module, _ in roots(runtime.read_text(encoding='utf-8')))
+              assert hashlib.sha256(runtime.read_bytes()).hexdigest() == expected_sha
+
+              engineer = root / 'src' / 'demo' / 'algorithm.py'
+              engineer.parent.mkdir(parents=True)
+              engineer.write_text('import os\n', encoding='utf-8')
+              violations = [module for module, _ in roots(engineer.read_text(encoding='utf-8')) if module not in (base | {'demo'})]
+              assert violations == ['os']
+              print('generated runtime os import accepted; engineer os import remains rejected')
+          PY

@@ -1,0 +1,52 @@
+name: Temporary Farbi dependency bundle
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/farbi-deps-bundle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Farbi runtime, test stack, and Playwright
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          mkdir -p /tmp/farbi-deps
+          python -m pip install --target /tmp/farbi-deps \
+            'Alembic>=1.13,<2.0' 'Werkzeug>=2.3.3,<3.0' 'Jinja2>=3.1,<4.0' \
+            'Flask==2.3.2' 'SQLAlchemy==2.0.40' 'Flask-SQLAlchemy==3.1.1' \
+            'Flask-Login==0.6.3' 'Flask-Migrate==4.1.0' 'python-dotenv==1.0.1' \
+            'Flask-Babel==4.0.0' 'Flask-WTF==1.2.1' 'email-validator==2.1.0' \
+            'requests==2.31.0' 'gunicorn==21.2.0' 'psycopg2-binary>=2.9.10,<3.0' \
+            'Pillow>=9.0,<11.0' 'trimesh==4.6.13' 'google-generativeai==0.8.4' \
+            'python-slugify==8.0.4' 'Authlib==1.5.2' 'azure-storage-blob==12.25.1' \
+            'azure-communication-email==1.0.0' 'azure-common==1.1.28' \
+            'beautifulsoup4==4.13.4' 'xhtml2pdf==0.2.17' 'bleach==6.2.0' \
+            'qrcode[pil]>=7.4,<8.0' 'sentry-sdk[flask]>=2.0,<3.0' 'redis>=5,<6' \
+            'dnspython>=2.6,<3' 'pytest==8.3.5' 'pytest-cov==6.0.0' 'ruff==0.9.10' \
+            'coverage==7.6.12' 'playwright'
+          PYTHONPATH=/tmp/farbi-deps python - <<'PY'
+          import flask, sqlalchemy, pytest, playwright
+          print('Flask', flask.__version__)
+          print('SQLAlchemy', sqlalchemy.__version__)
+          print('pytest', pytest.__version__)
+          print('Playwright import OK')
+          PY
+          tar -C /tmp -czf /tmp/farbi-deps-python313.tar.gz farbi-deps
+      - uses: actions/upload-artifact@v4
+        with:
+          name: farbi-deps-python313
+          path: /tmp/farbi-deps-python313.tar.gz
+          if-no-files-found: error
+          retention-days: 1

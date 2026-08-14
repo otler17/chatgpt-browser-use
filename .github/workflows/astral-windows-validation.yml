@@ -20,73 +20,11 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Install MinGW-w64 UCRT64
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: false
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc
-
-      - name: Compile plugin and package MinGW runtime DLLs
-        shell: msys2 {0}
+      - name: Exercise exact scoped static import-policy fix
+        shell: pwsh
         run: |
-          set -euo pipefail
-          mkdir -p native
-          cat > probe.cpp <<'CPP'
-          #include <string>
-          extern "C" __declspec(dllexport) int astral_probe() {
-              std::string value = "astral";
-              return static_cast<int>(value.size());
-          }
-          CPP
-          g++ -shared -std=c++17 probe.cpp -o native/probe.dll
-
-          for name in \
-            libstdc++-6.dll \
-            libgcc_s_seh-1.dll \
-            libgcc_s_dw2-1.dll \
-            libgcc_s_sjlj-1.dll \
-            libwinpthread-1.dll
-          do
-            candidate="$(g++ -print-file-name="$name")"
-            if [[ -n "$candidate" && "$candidate" != "$name" && -f "$candidate" ]]; then
-              cp -f "$candidate" native/
-            fi
-          done
-          ls -lh native
-          test -f native/libstdc++-6.dll
-
-      - name: Exercise Python Windows DLL search bridge
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import ctypes
-          import os
-          from pathlib import Path
-
-          path = (Path('native') / 'probe.dll').resolve()
-          dll_directory = None
-          try:
-              if os.name == 'nt' and hasattr(os, 'add_dll_directory'):
-                  dll_directory = os.add_dll_directory(str(path.parent))
-              lib = ctypes.CDLL(str(path))
-          finally:
-              if dll_directory is not None:
-                  dll_directory.close()
-          lib.astral_probe.argtypes = []
-          lib.astral_probe.restype = ctypes.c_int
-          value = lib.astral_probe()
-          print('astral_probe=', value)
-          assert value == 6
-          PY
-
-      - name: Exercise scoped static import-policy fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
+          $ErrorActionPreference = 'Stop'
+          @'
           import ast
           import hashlib
           from pathlib import Path
@@ -117,16 +55,117 @@ jobs:
               runtime.parent.mkdir(parents=True)
               runtime.write_text('import ctypes\nimport os\nfrom pathlib import Path\n', encoding='utf-8')
               expected_sha = hashlib.sha256(runtime.read_bytes()).hexdigest()
-              base = APPROVED_STDLIB_IMPORTS | APPROVED_ASTRAL_IMPORTS | {'ultra'}
-              file_allowed = base | APPROVED_NATIVE_RUNTIME_IMPORTS
-              assert all(module in file_allowed for module, _ in roots(runtime.read_text(encoding='utf-8')))
-              assert hashlib.sha256(runtime.read_bytes()).hexdigest() == expected_sha
 
-              engineer = root / 'src' / 'demo' / 'algorithm.py'
-              engineer.parent.mkdir(parents=True)
+              base = APPROVED_STDLIB_IMPORTS | APPROVED_ASTRAL_IMPORTS | {'ultra'}
+              relative = runtime.relative_to(root).as_posix()
+              file_allowed = base
+              if (
+                  relative == 'src/ultra/_native_runtime.py'
+                  and expected_sha
+                  and hashlib.sha256(runtime.read_bytes()).hexdigest() == expected_sha
+              ):
+                  file_allowed = file_allowed | APPROVED_NATIVE_RUNTIME_IMPORTS
+              assert all(module in file_allowed for module, _ in roots(runtime.read_text(encoding='utf-8')))
+
+              # A tampered generated runtime loses the exception.
+              runtime.write_text(runtime.read_text(encoding='utf-8') + '# tampered\n', encoding='utf-8')
+              tampered_allowed = base
+              if hashlib.sha256(runtime.read_bytes()).hexdigest() == expected_sha:
+                  tampered_allowed |= APPROVED_NATIVE_RUNTIME_IMPORTS
+              assert [m for m, _ in roots(runtime.read_text(encoding='utf-8')) if m not in tampered_allowed] == ['os']
+
+              # Engineer-owned source still cannot import os.
+              engineer = root / 'src' / 'ultra' / 'algorithm.py'
               engineer.write_text('import os\n', encoding='utf-8')
-              engineer_allowed = APPROVED_STDLIB_IMPORTS | APPROVED_ASTRAL_IMPORTS | {'demo'}
-              violations = [module for module, _ in roots(engineer.read_text(encoding='utf-8')) if module not in engineer_allowed]
-              assert violations == ['os']
-              print('generated runtime os import accepted; engineer os import remains rejected')
-          PY
+              assert [m for m, _ in roots(engineer.read_text(encoding='utf-8')) if m not in base] == ['os']
+          print('SCOPED_IMPORT_POLICY_OK')
+          '@ | Set-Content -Encoding UTF8 static_policy.py
+          python static_policy.py
+
+      - name: Install MinGW-w64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install mingw -y --no-progress
+          if (-not (Test-Path 'C:\ProgramData\mingw64\mingw64\bin\g++.exe')) {
+            throw 'Chocolatey MinGW compiler was not installed at the expected path'
+          }
+
+      - name: Compile plugin and package MinGW runtime DLLs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $gpp = 'C:\ProgramData\mingw64\mingw64\bin\g++.exe'
+          New-Item -ItemType Directory -Force native | Out-Null
+          @'
+          #include <string>
+          extern "C" __declspec(dllexport) int astral_probe(int value) {
+              std::string marker = "astral";
+              marker += std::to_string(value);
+              return static_cast<int>(marker.size());
+          }
+          '@ | Set-Content -Encoding UTF8 probe.cpp
+          & $gpp -std=c++17 -O2 -shared probe.cpp -o native\probe.dll
+          if ($LASTEXITCODE -ne 0) { throw "MinGW build failed with $LASTEXITCODE" }
+
+          $runtimeNames = @(
+            'libstdc++-6.dll',
+            'libgcc_s_seh-1.dll',
+            'libgcc_s_dw2-1.dll',
+            'libgcc_s_sjlj-1.dll',
+            'libwinpthread-1.dll'
+          )
+          foreach ($name in $runtimeNames) {
+            $candidate = (& $gpp "-print-file-name=$name" | Select-Object -First 1).Trim()
+            if ($candidate -and $candidate -ne $name -and (Test-Path $candidate)) {
+              Copy-Item -Force $candidate native\
+            }
+          }
+          Get-ChildItem native | Format-Table Name,Length
+          if (-not (Test-Path native\libstdc++-6.dll)) { throw 'libstdc++-6.dll was not packaged' }
+          if (-not (Test-Path native\libgcc_s_seh-1.dll)) { throw 'libgcc_s_seh-1.dll was not packaged' }
+          if (-not (Test-Path native\libwinpthread-1.dll)) { throw 'libwinpthread-1.dll was not packaged' }
+
+      - name: Exercise Python Windows DLL search bridge and isolated process
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          import ctypes
+          import os
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          path = (Path('native') / 'probe.dll').resolve()
+          handle = os.add_dll_directory(str(path.parent)) if hasattr(os, 'add_dll_directory') else None
+          try:
+              lib = ctypes.CDLL(str(path))
+              lib.astral_probe.argtypes = [ctypes.c_int]
+              lib.astral_probe.restype = ctypes.c_int
+              assert lib.astral_probe(42) == len('astral42')
+          finally:
+              if handle is not None:
+                  handle.close()
+
+          child = r'''
+          import ctypes, os, sys
+          from pathlib import Path
+          p = Path(sys.argv[1]).resolve()
+          h = os.add_dll_directory(str(p.parent)) if hasattr(os, 'add_dll_directory') else None
+          try:
+              lib = ctypes.CDLL(str(p))
+              lib.astral_probe.argtypes = [ctypes.c_int]
+              lib.astral_probe.restype = ctypes.c_int
+              assert lib.astral_probe(42) == 8
+              print('ISOLATED_WINDOWS_DLL_LOAD_OK')
+          finally:
+              if h is not None: h.close()
+          '''
+          result = subprocess.run([sys.executable, '-c', child, str(path)], cwd=str(path.parent), capture_output=True, text=True)
+          print(result.stdout)
+          print(result.stderr, file=sys.stderr)
+          assert result.returncode == 0, result.returncode
+          print('ASTRAL_WINDOWS_MINGW_E2E_OK')
+          '@ | Set-Content -Encoding UTF8 load_probe.py
+          python load_probe.py

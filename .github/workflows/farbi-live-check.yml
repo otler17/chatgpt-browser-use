@@ -15,28 +15,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Check out published origin
-        uses: actions/checkout@v4
-
-      - name: Probe stable and origin auth paths
+      - name: Verify remapped public auth pages
         shell: bash
         run: |
           set -euo pipefail
-          ORIGIN=$(python -c 'import json; print(json.load(open("farbi-live-origin.json"))["origin"])')
           STABLE="https://farbi-marketplace.omar-gassab.chatgpt.site"
 
-          probe() {
-            local url="$1"
-            echo "=== $url ==="
-            curl -sSI --max-time 20 "$url" | sed -n '1,25p' || true
+          check() {
+            local path="$1"
+            local result
+            result=$(curl -fsSL \
+              --max-time 30 \
+              --max-redirs 3 \
+              -o /tmp/farbi-page.html \
+              -w '%{http_code} %{num_redirects} %{url_effective}' \
+              "$STABLE$path")
+            echo "$path -> $result"
+            test "$(awk '{print $1}' <<< "$result")" = "200"
+            test "$(awk '{print $2}' <<< "$result")" = "0"
+            grep -qi '<form' /tmp/farbi-page.html
           }
 
-          probe "$ORIGIN/login"
-          probe "$ORIGIN/register"
-          probe "$ORIGIN/signin"
-          probe "$ORIGIN/signup"
-          probe "$STABLE/login"
-          probe "$STABLE/register"
-          probe "$STABLE/signin"
-          probe "$STABLE/signup"
-          probe "$STABLE/__farbi_probe_missing"
+          curl -fsS "$STABLE/" >/dev/null
+          check /signin
+          check /signup

@@ -47,7 +47,7 @@ jobs:
 
     env:
       APP_ENV: development
-      SECRET_KEY: farbi-verified-demo-secret-20260816-v4
+      SECRET_KEY: farbi-verified-demo-secret-20260816-v5
       DATABASE_URL: postgresql://farbi_user:farbi_password@127.0.0.1:5432/farbi_db
       REDIS_URL: redis://127.0.0.1:6379/0
       PAYMENT_WEBHOOK_SECRET: farbi-verified-demo-webhook
@@ -58,11 +58,11 @@ jobs:
       LOCAL_EMAIL_OUTBOX: instance/offline_emails
       PAYMENT_PROVIDER: mock
       DEMO_PASSWORD: Password123
-      FARBI_PUBLIC_HOST: farbi-demo-otler17-v4.trapdoor.sh
-      FARBI_URL: https://farbi-demo-otler17-v4.trapdoor.sh
-      MAIN_APP_DOMAINS: farbi-demo-otler17-v4.trapdoor.sh,localhost,127.0.0.1
-      PUBLIC_AUTH_ORIGIN: https://farbi-demo-otler17-v4.trapdoor.sh
-      FLASK_SERVER_NAME: farbi-demo-otler17-v4.trapdoor.sh
+      FARBI_PUBLIC_HOST: farbi-demo-otler17-v5.trapdoor.sh
+      FARBI_URL: https://farbi-demo-otler17-v5.trapdoor.sh
+      MAIN_APP_DOMAINS: farbi-demo-otler17-v5.trapdoor.sh,localhost,127.0.0.1
+      PUBLIC_AUTH_ORIGIN: https://farbi-demo-otler17-v5.trapdoor.sh
+      FLASK_SERVER_NAME: farbi-demo-otler17-v5.trapdoor.sh
 
     steps:
       - name: Check out deployment bundle
@@ -127,7 +127,7 @@ jobs:
             trapdoor_entry:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
 
-          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-demo-otler17-v4 \
+          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-demo-otler17-v5 \
             > "$RUNNER_TEMP/trapdoor.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/trapdoor.pid"
 
@@ -135,8 +135,9 @@ jobs:
             if curl -fsS --max-time 20 "$FARBI_URL/" >/dev/null && \
                curl -fsS --max-time 20 "$FARBI_URL/browse" >/dev/null && \
                curl -fsS --max-time 20 "$FARBI_URL/login" >/dev/null && \
-               curl -fsS --max-time 20 "$FARBI_URL/register" >/dev/null; then
-              echo "FARBI public demo is reachable at $FARBI_URL"
+               curl -fsS --max-time 20 "$FARBI_URL/register" >/dev/null && \
+               curl -fsSL --max-time 20 "$FARBI_URL/demo-access/customer" >/dev/null; then
+              echo "FARBI cookieless demo is reachable at $FARBI_URL"
               exit 0
             fi
             sleep 2
@@ -147,11 +148,11 @@ jobs:
           cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
           exit 1
 
-      - name: Verify HTTP pages, PostgreSQL accounts, roles and signup
+      - name: Verify HTTP cookieless pages, PostgreSQL accounts, roles and signup
         working-directory: farbi-project
         run: python verify_demo.py
 
-      - name: Verify real Chromium browser logins
+      - name: Verify Chromium after deleting every cookie
         working-directory: farbi-project
         run: python verify_browser.py
 
@@ -160,11 +161,12 @@ jobs:
         run: |
           set -euo pipefail
           test -f farbi-demo-manifest.json
-          grep -q '"chromium_role_logins_e2e": "passed"' farbi-demo-manifest.json
+          grep -q '"cookieless_chromium_role_logins_e2e": "passed"' farbi-demo-manifest.json
+          grep -q '"http_cookieless_role_access_e2e": "passed"' farbi-demo-manifest.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add farbi-demo-manifest.json
-          git commit -m "Publish Chromium-verified FARBI demo manifest [skip ci]" || true
+          git commit -m "Publish cookie-independent FARBI demo manifest [skip ci]" || true
           git pull --rebase origin master || true
           git push origin HEAD:master || true
 
@@ -181,12 +183,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "FARBI Chromium-verified demo: $FARBI_URL"
+          echo "FARBI cookie-independent demo: $FARBI_URL"
           for i in {1..66}; do
             curl -fsS --max-time 20 "$FARBI_URL/" >/dev/null
             curl -fsS --max-time 20 "$FARBI_URL/browse" >/dev/null
             curl -fsS --max-time 20 "$FARBI_URL/login" >/dev/null
             curl -fsS --max-time 20 "$FARBI_URL/register" >/dev/null
+            curl -fsSL --max-time 20 "$FARBI_URL/demo-access/customer" >/dev/null
             echo "heartbeat $i"
             sleep 300
           done

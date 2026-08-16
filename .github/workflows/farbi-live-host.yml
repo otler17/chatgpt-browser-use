@@ -60,6 +60,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Restore the exact uploaded project
+        id: restore
         shell: bash
         run: |
           set -euo pipefail
@@ -86,16 +87,19 @@ jobs:
           cache-dependency-path: farbi-project/requirements/prod.txt
 
       - name: Install exact application dependencies
+        id: dependencies
         working-directory: farbi-project
         run: python -m pip install -r requirements/prod.txt
 
       - name: Apply PostgreSQL migrations and seed integration users
+        id: database
         working-directory: farbi-project
         run: |
           python -m flask --app application db upgrade
           python scripts/seed_integration_data.py
 
       - name: Start the uploaded Flask application
+        id: application
         working-directory: farbi-project
         shell: bash
         run: |
@@ -115,6 +119,7 @@ jobs:
           exit 1
 
       - name: Open the live tunnel
+        id: tunnel
         shell: bash
         run: |
           set -euo pipefail
@@ -148,12 +153,13 @@ jobs:
           retention-days: 1
 
       - name: Publish the live URL for Sites
+        id: publish
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import json
-          imort os
+          import os
           from datetime import datetime, timezone
 
           payload = {
@@ -164,7 +170,7 @@ jobs:
               "published_at": datetime.now(timezone.utc).isoformat(),
           }
           with open("farbi-live-origin.json", "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+              json.dump(payload, handle, indent=2)
               handle.write("\n")
           PY
           git config user.name "github-actions[bot]"
@@ -173,6 +179,53 @@ jobs:
           git commit -m "Publish FARBI live origin [skip ci]"
           git push origin HEAD:master
 
+      - name: Publish launch status
+        if: always()
+        shell: bash
+        env:
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
+          DATABASE_OUTCOME: ${{ steps.database.outcome }}
+          APPLICATION_OUTCOME: ${{ steps.application.outcome }}
+          TUNNEL_OUTCOME: ${{ steps.tunnel.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+        run: |
+          set -u
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          payload = {
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "commit": os.environ["GITHUB_SHA"],
+              "published_at": datetime.now(timezone.utc).isoformat(),
+              "steps": {
+                  "restore": os.environ.get("RESTORE_OUTCOME", "unknown"),
+                  "dependencies": os.environ.get("DEPENDENCIES_OUTCOME", "unknown"),
+                  "database": os.environ.get("DATABASE_OUTCOME", "unknown"),
+                  "application": os.environ.get("APPLICATION_OUTCOME", "unknown"),
+                  "tunnel": os.environ.get("TUNNEL_OUTCOME", "unknown"),
+                  "publish": os.environ.get("PUBLISH_OUTCOME", "unknown"),
+              },
+          }
+          for name in ("farbi-gunicorn.log", "cloudflared.log"):
+              path = Path(os.environ["RUNNER_TEMP"]) / name
+              if path.exists():
+                  payload[name] = path.read_text(encoding="utf-8", errors="replace")[-8000:]
+          Path("farbi-launch-status.json").write_text(
+              json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add farbi-launch-status.json
+          git commit -m "Publish FARBI launch status [skip ci]" || true
+          git pull --rebase origin master || true
+          git push origin HEAD:master || true
+
       - name: Keep FARBI online
         shell: bash
         run: |
@@ -180,6 +233,6 @@ jobs:
           echo "FARBI is live at $FARBI_TUNNEL_URL"
           for i in {1..66}; do
             curl -fsS "$FARBI_TUNNEL_URL/" >/dev/null
-            echo "heartbat $i — $FARBI_TUNNEL_URL"
+            echo "heartbeat $i — $FARBI_TUNNEL_URL"
             sleep 300
           done

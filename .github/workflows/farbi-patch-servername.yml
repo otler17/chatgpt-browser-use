@@ -1,0 +1,36 @@
+name: Patch FARBI tunnel host compatibility
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-patch-servername.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Remove development host pin behind Trapdoor
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/farbi-live-host.yml')
+          s = p.read_text(encoding='utf-8')
+          old = 'FLASK_SERVER_NAME="farbi-otler17.trapdoor.sh" \\\n'
+          new = 'FLASK_SERVER_NAME="" \\\n'
+          if old not in s:
+              raise SystemExit('Expected FLASK_SERVER_NAME line not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/farbi-live-host.yml
+          git commit -m "Allow FARBI tunnel forwarded Host"
+          git push origin HEAD:master

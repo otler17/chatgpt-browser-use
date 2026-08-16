@@ -1,0 +1,45 @@
+name: Fix FARBI demo signup validation
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-fix-demo-validation.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch demo account addresses and diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/farbi-live-host.yml')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('demo.customer@example.com', 'farbi.demo.customer@gmail.com')
+          s = s.replace('demo.admin@example.com', 'farbi.demo.admin@gmail.com')
+          old = '          test "$REGISTER_FINAL" = "$ORIGIN/"\n'
+          new = '''          if [ "$REGISTER_FINAL" != "$ORIGIN/" ]; then
+            echo "Registration did not redirect to home; visible validation messages:"
+            grep -Eo '<span class="text-xs text-red-500[^>]*>[^<]+' "$RUNNER_TEMP/register-result.html" | sed 's/<[^>]*>//g' || true
+            grep -Ei 'invalid|taken|required|match|error' "$RUNNER_TEMP/register-result.html" | head -40 || true
+            exit 1
+          fi
+'''
+          if old not in s:
+              raise SystemExit('registration assertion not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/farbi-live-host.yml
+          git commit -m "Use valid demo emails and expose signup validation errors"
+          git push origin HEAD:master

@@ -30,7 +30,7 @@ jobs:
           TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' /tmp/signup.html | head -1 | sed 's/.*value="//;s/"$//')
           test -n "$TOKEN"
 
-          REGISTER_FINAL=$(curl -fsS -L -b /tmp/register.cookies -c /tmp/register.cookies \
+          REGISTER_FINAL=$(curl -fsS -L -e "$ORIGIN/signup" -b /tmp/register.cookies -c /tmp/register.cookies \
             -o /tmp/register-result.html -w '%{url_effective}' \
             --data-urlencode "csrf_token=$TOKEN" \
             --data-urlencode "username=$USERNAME" \
@@ -46,7 +46,7 @@ jobs:
           TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' /tmp/signin.html | head -1 | sed 's/.*value="//;s/"$//')
           test -n "$TOKEN"
 
-          LOGIN_FINAL=$(curl -fsS -L -b /tmp/login.cookies -c /tmp/login.cookies \
+          LOGIN_FINAL=$(curl -fsS -L -e "$ORIGIN/signin" -b /tmp/login.cookies -c /tmp/login.cookies \
             -o /tmp/login-result.html -w '%{url_effective}' \
             --data-urlencode "csrf_token=$TOKEN" \
             --data-urlencode "identifier=$EMAIL" \

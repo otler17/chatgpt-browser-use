@@ -8,7 +8,7 @@ import requests
 
 from application import User, app
 
-BASE = os.environ.get("FARBI_URL", "https://farbi-otler17.trapdoor.sh").rstrip("/")
+BASE = os.environ.get("FARBI_URL", "https://farbi-demo-otler17.trapdoor.sh").rstrip("/")
 PASSWORD = os.environ.get("DEMO_PASSWORD", "Password123")
 TIMEOUT = 30
 
@@ -41,9 +41,12 @@ def login(email, label):
         allow_redirects=True,
     )
     require_status(response, 200, f"{label} login")
-    if response.url.rstrip("/") != BASE:
-        raise RuntimeError(f"{label} login did not land on home: {response.url}")
-    print(f"{label} login -> home")
+    # Trapdoor may follow the upstream Flask 302 internally while retaining the
+    # original public URL. Prove authentication by the persisted session cookie
+    # and by a login-required page in the caller, not by url_effective.
+    if not session.cookies:
+        raise RuntimeError(f"{label} login returned no session cookies")
+    print(f"{label} login POST -> 200; cookies={sorted(session.cookies.keys())}")
     return session
 
 
@@ -72,8 +75,8 @@ def verify_signup():
         allow_redirects=True,
     )
     require_status(response, 200, "signup")
-    if response.url.rstrip("/") != BASE:
-        raise RuntimeError(f"signup did not land on home: {response.url}")
+    if not session.cookies:
+        raise RuntimeError("signup returned no session cookies")
     check_authenticated(session, "/profile/edit", "new customer")
     with app.app_context():
         created = User.query.filter_by(email=email).one_or_none()

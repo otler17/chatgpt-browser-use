@@ -1,4 +1,4 @@
-name: Temporary F5-TTS dependency patch
+name: Temporary F5-TTS minimal dependency patch
 
 on:
   push:
@@ -17,19 +17,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Download dependency patch wheels
+      - name: Build missing dependency wheels
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p f5_dep_patch
-          python -m pip install -U pip
-          python -m pip download --dest f5_dep_patch --only-binary=:all: --no-deps \
-            'tokenizers==0.23.0rc0' 'torch-einops-utils>=0.1.12' 'encodec==0.1.1' \
-            'frozendict' 'hyper-connections>=0.1.8' 'safetensors>=0.8.0'
+          python -m pip install -U pip wheel setuptools
+          python -m pip wheel --wheel-dir f5_dep_patch --no-deps \
+            'torch-einops-utils>=0.1.12' 'encodec==0.1.1' \
+            'frozendict' 'hyper-connections>=0.1.8'
           ls -lh f5_dep_patch
       - name: Upload dependency patch
         uses: actions/upload-artifact@v4
         with:
-          name: f5-dep-patch
+          name: f5-minimal-dep-patch
           path: f5_dep_patch
+          if-no-files-found: error
           retention-days: 1

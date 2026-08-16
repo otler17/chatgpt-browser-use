@@ -1,13 +1,14 @@
 {
   "origin": "https://farbi-demo-otler17.trapdoor.sh",
-  "run_id": "31956027636",
-  "published_at": "2026-08-16T15:35:15.481658+00:00",
+  "run_id": "31957533873",
+  "published_at": "2026-08-16T16:06:12.684814+00:00",
   "database": "PostgreSQL 16",
   "redis": "Redis 7",
   "auth_routes": {
     "signin": "/login",
     "signup": "/register"
   },
+  "session_cookie": "farbi_demo_session_v3",
   "demo_password": "Password123",
   "demo_accounts": {
     "customer": {
@@ -62,6 +63,7 @@
     "/design/<all six demo ids>",
     "/uploads/images/design_previews/demo_planter_thumb.jpg"
   ],
+  "stale_cookie_login_e2e": "passed",
   "signup_e2e": "passed",
   "role_logins_e2e": "passed"
 }

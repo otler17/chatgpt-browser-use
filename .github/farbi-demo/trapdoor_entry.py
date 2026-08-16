@@ -11,23 +11,32 @@ from application import LoginForm, RegistrationForm, User, app, db
 app.config["WTF_CSRF_ENABLED"] = False
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# Use a fresh, host-only browser cookie for this deployment. Earlier ephemeral
-# runs used the default Flask cookie name on the same fixed tunnel hostname, so
-# a real browser could retain a stale session from an older database while the
-# clean requests.Session used by CI would pass. The versioned cookie names make
-# every corrected demo start from a clean browser auth state.
-app.config["SESSION_COOKIE_NAME"] = "farbi_demo_session_v3"
+# Fresh host-only cookies for the v4 public demo hostname. The deployment is
+# only considered healthy after Chromium stores this cookie and opens protected
+# pages with it.
+app.config["SESSION_COOKIE_NAME"] = "farbi_demo_session_v4"
 app.config["SESSION_COOKIE_DOMAIN"] = None
 app.config["SESSION_COOKIE_PATH"] = "/"
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["REMEMBER_COOKIE_NAME"] = "farbi_demo_remember_v3"
+app.config["REMEMBER_COOKIE_NAME"] = "farbi_demo_remember_v4"
 app.config["REMEMBER_COOKIE_DOMAIN"] = None
 app.config["REMEMBER_COOKIE_PATH"] = "/"
 app.config["REMEMBER_COOKIE_SECURE"] = True
 app.config["REMEMBER_COOKIE_HTTPONLY"] = True
 app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
+
+
+@app.after_request
+def demo_no_cache(response):
+    # Prevent an intermediary/browser from reusing an anonymous index or auth
+    # response immediately after the session changes.
+    if request.path in {"/", "/login", "/register"} or request.path.startswith(("/profile", "/designer", "/admin")):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 def demo_register():
@@ -40,13 +49,6 @@ def demo_register():
         email = (request.form.get("email") or "").strip().lower()
         password = request.form.get("password") or ""
         confirmation = request.form.get("confirm_password") or ""
-        app.logger.warning(
-            "DEMO_REGISTER endpoint=%s keys=%s username=%s email=%s",
-            request.endpoint,
-            sorted(request.form.keys()),
-            username,
-            email,
-        )
         error = None
 
         if len(username) < 3:
@@ -63,7 +65,6 @@ def demo_register():
             error = "Email already exists."
 
         if error:
-            app.logger.warning("DEMO_REGISTER rejected reason=%s", error)
             flash(error, "danger")
         else:
             user = User(
@@ -78,7 +79,6 @@ def demo_register():
             session.clear()
             login_user(user, force=True)
             session["auth_version"] = int(user.auth_version or 1)
-            app.logger.warning("DEMO_REGISTER success user_id=%s", user.id)
             return redirect("/", code=302)
 
     return render_template("register.html", form=form)
@@ -86,8 +86,6 @@ def demo_register():
 
 def demo_login():
     form = LoginForm()
-    # Always honor an explicit POST even if the browser carried an old auth
-    # state. This makes re-login deterministic for human testers.
     if request.method == "GET" and current_user.is_authenticated:
         return redirect("/", code=302)
 
@@ -103,9 +101,8 @@ def demo_login():
         password_ok = bool(user and user.check_password(password))
         archived = bool(user and user.is_archived)
         app.logger.warning(
-            "DEMO_LOGIN endpoint=%s keys=%s identifier=%s found=%s password_ok=%s archived=%s",
+            "DEMO_LOGIN endpoint=%s identifier=%s found=%s password_ok=%s archived=%s",
             request.endpoint,
-            sorted(request.form.keys()),
             identifier,
             bool(user),
             password_ok,
@@ -119,20 +116,12 @@ def demo_login():
             session["farbi_demo_role"] = (
                 "admin" if user.is_admin else "designer" if user.is_designer else "customer"
             )
-            app.logger.warning(
-                "DEMO_LOGIN success user_id=%s session_user=%s cookie=%s",
-                user.id,
-                session.get("_user_id"),
-                app.config["SESSION_COOKIE_NAME"],
-            )
             return redirect("/", code=302)
         flash("Invalid credentials.", "danger")
 
     return render_template("login.html", form=form)
 
 
-# Resolve endpoints from the URL map instead of assuming their names. This also
-# guards against endpoint renames in the restored source bundle.
 login_endpoints = [rule.endpoint for rule in app.url_map.iter_rules() if rule.rule == "/login"]
 register_endpoints = [rule.endpoint for rule in app.url_map.iter_rules() if rule.rule == "/register"]
 if not login_endpoints or not register_endpoints:
@@ -143,7 +132,7 @@ for endpoint in register_endpoints:
     app.view_functions[endpoint] = demo_register
 app.logger.warning("DEMO_AUTH overrides login=%s register=%s", login_endpoints, register_endpoints)
 
-PUBLIC_HOST = os.environ.get("FARBI_PUBLIC_HOST", "farbi-demo-otler17.trapdoor.sh")
+PUBLIC_HOST = os.environ.get("FARBI_PUBLIC_HOST", "farbi-demo-otler17-v4.trapdoor.sh")
 INTERNAL_HOST = "localhost:8000"
 
 

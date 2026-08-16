@@ -134,9 +134,30 @@ jobs:
           curl -fsSL https://trapdoor.sh/install.sh | sh
           command -v trapdoor
 
+          cat > farbi-project/trapdoor_entry.py <<'PY'
+          from application import app
+
+          PUBLIC_HOST = "farbi-otler17.trapdoor.sh"
+          INTERNAL_HOST = "localhost:8000"
+
+          class TrapdoorPublicHost:
+              def __init__(self, wrapped):
+                  self.wrapped = wrapped
+
+              def __call__(self, environ, start_response):
+                  if environ.get("HTTP_HOST", "").lower() == INTERNAL_HOST:
+                      environ["HTTP_HOST"] = PUBLIC_HOST
+                      environ["SERVER_NAME"] = PUBLIC_HOST
+                      environ["SERVER_PORT"] = "443"
+                      environ["wsgi.url_scheme"] = "https"
+                  return self.wrapped(environ, start_response)
+
+          app.wsgi_app = TrapdoorPublicHost(app.wsgi_app)
+          PY
+
           kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
           sleep 2
-          FLASK_SERVER_NAME="localhost:8000" \
+          FLASK_SERVER_NAME="farbi-otler17.trapdoor.sh" \
           MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,localhost,127.0.0.1" \
           PUBLIC_AUTH_ORIGIN="$FARBI_FIXED_URL" \
           RUNNER_TRACKING_ID="" nohup gunicorn \
@@ -145,7 +166,7 @@ jobs:
             --workers 2 \
             --threads 4 \
             --timeout 120 \
-            application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
+            trapdoor_entry:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
 
           RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-otler17 \
@@ -191,6 +212,7 @@ jobs:
             --data-urlencode "confirm_password=$PASSWORD" \
             --data-urlencode "submit=Register" \
             "$ORIGIN/signup")
+          echo "registration final URL: $REGISTER_FINAL"
           test "$REGISTER_FINAL" = "$ORIGIN/"
 
           curl -fsS -c "$RUNNER_TEMP/login.cookies" "$ORIGIN/signin" -o "$RUNNER_TEMP/signin.html"
@@ -205,6 +227,7 @@ jobs:
             --data-urlencode "password=$PASSWORD" \
             --data-urlencode "submit=Login" \
             "$ORIGIN/signin")
+          echo "login final URL: $LOGIN_FINAL"
           test "$LOGIN_FINAL" = "$ORIGIN/"
           echo "FARBI signup and sign in E2E passed."
 

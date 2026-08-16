@@ -56,7 +56,7 @@ jobs:
           set -euxo pipefail
           mkdir -p out
           cat > /tmp/run_silma.py <<'PY'
-          import math, pathlib
+          import pathlib
           import numpy as np
           import soundfile as sf
           from importlib.resources import files
@@ -133,3 +133,5 @@ jobs:
             out/copy_ar.txt
           if-no-files-found: error
           retention-days: 1
+
+# trigger

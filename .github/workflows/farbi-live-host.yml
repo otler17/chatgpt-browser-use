@@ -186,79 +186,105 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ORIGIN="$FARBI_FIXED_URL"
-          DEMO_USERNAME="demo${GITHUB_RUN_ID}"
-          DEMO_EMAIL="farbi.demo.${GITHUB_RUN_ID}@gmail.com"
-          DEMO_PASSWORD="FarbiDemo-${GITHUB_RUN_ID}!"
-          export DEMO_EMAIL DEMO_PASSWORD
-
-          curl -fsS -c "$RUNNER_TEMP/register.cookies" "$ORIGIN/signup" -o "$RUNNER_TEMP/signup.html"
-          CSRF=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signup.html" | head -1 | sed 's/.*value="//;s/"$//')
-          test -n "$CSRF"
-
-          REGISTER_STATUS=$(curl -sS -e "$ORIGIN/signup" \
-            -b "$RUNNER_TEMP/register.cookies" -c "$RUNNER_TEMP/register.cookies" \
-            -D "$RUNNER_TEMP/register.headers" -o "$RUNNER_TEMP/register-result.html" \
-            -w '%{http_code}' \
-            --data-urlencode "csrf_token=$CSRF" \
-            --data-urlencode "username=$DEMO_USERNAME" \
-            --data-urlencode "email=$DEMO_EMAIL" \
-            --data-urlencode "password=$DEMO_PASSWORD" \
-            --data-urlencode "confirm_password=$DEMO_PASSWORD" \
-            --data-urlencode "submit=Sign Up" \
-            "$ORIGIN/signup")
-          echo "signup HTTP status: $REGISTER_STATUS"
-          if [ "$REGISTER_STATUS" != "302" ]; then
-            echo "Signup form did not redirect; diagnostic lines:"
-            grep -Ei 'invalid|taken|required|match|error|text-red' "$RUNNER_TEMP/register-result.html" | head -80 || true
-            exit 1
-          fi
-
           python - <<'PY'
           import os
+          import sys
+          import requests
+          from bs4 import BeautifulSoup
           from application import app, User
+
+          origin = os.environ["FARBI_FIXED_URL"].rstrip("/")
+          run_id = os.environ["GITHUB_RUN_ID"]
+          username = f"demo{run_id}"
+          email = f"farbi.demo.{run_id}@gmail.com"
+          password = f"FarbiDemo-{run_id}!"
+
+          def hidden_fields(html):
+              soup = BeautifulSoup(html, "html.parser")
+              form = soup.find("form")
+              if form is None:
+                  raise AssertionError("No form found")
+              fields = []
+              for node in form.find_all("input"):
+                  if node.get("type", "text").lower() == "hidden" and node.get("name"):
+                      fields.append((node["name"], node.get("value", "")))
+              return fields
+
+          def print_form_errors(html, label):
+              soup = BeautifulSoup(html, "html.parser")
+              messages = []
+              form = soup.find("form")
+              if form:
+                  for node in form.select("span.text-red-500"):
+                      text = node.get_text(" ", strip=True)
+                      if text:
+                          messages.append(text)
+              for selector in (".alert", "[role=alert]", ".flash-message"):
+                  for node in soup.select(selector):
+                      text = node.get_text(" ", strip=True)
+                      if text and text not in messages:
+                          messages.append(text)
+              print(f"{label} messages: {messages}")
+
+          signup = requests.Session()
+          r = signup.get(origin + "/signup", timeout=30)
+          r.raise_for_status()
+          payload = hidden_fields(r.text)
+          payload.extend([
+              ("username", username),
+              ("email", email),
+              ("password", password),
+              ("confirm_password", password),
+              ("submit", "Register"),
+          ])
+          r = signup.post(
+              origin + "/signup",
+              data=payload,
+              headers={"Referer": origin + "/signup"},
+              allow_redirects=False,
+              timeout=30,
+          )
+          print("signup status:", r.status_code, "location:", r.headers.get("Location"))
+          if r.status_code not in (302, 303):
+              print_form_errors(r.text, "signup")
+              sys.exit(1)
+
           with app.app_context():
-              user = User.query.filter_by(email=os.environ["DEMO_EMAIL"]).one_or_none()
+              user = User.query.filter_by(email=email).one_or_none()
               assert user is not None, "registered user missing from PostgreSQL"
-              assert user.check_password(os.environ["DEMO_PASSWORD"]), "password hash verification failed"
+              assert user.check_password(password), "password hash verification failed"
               print({"postgres_user_id": user.id, "email": user.email})
+
+          r = signup.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
+          print("protected profile after signup:", r.status_code)
+          assert r.status_code == 200, "signup session did not authenticate protected route"
+
+          signin = requests.Session()
+          r = signin.get(origin + "/signin", timeout=30)
+          r.raise_for_status()
+          payload = hidden_fields(r.text)
+          payload.extend([
+              ("identifier", email),
+              ("password", password),
+              ("submit", "Login"),
+          ])
+          r = signin.post(
+              origin + "/signin",
+              data=payload,
+              headers={"Referer": origin + "/signin"},
+              allow_redirects=False,
+              timeout=30,
+          )
+          print("fresh signin status:", r.status_code, "location:", r.headers.get("Location"))
+          if r.status_code not in (302, 303):
+              print_form_errors(r.text, "signin")
+              sys.exit(1)
+
+          r = signin.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
+          print("protected profile after fresh signin:", r.status_code)
+          assert r.status_code == 200, "fresh signin did not authenticate protected route"
+          print("FARBI AUTH E2E PASSED")
           PY
-
-          PROFILE_STATUS=$(curl -sS \
-            -b "$RUNNER_TEMP/register.cookies" \
-            -o "$RUNNER_TEMP/profile-after-signup.html" \
-            -w '%{http_code}' \
-            "$ORIGIN/profile/edit")
-          echo "protected profile after signup: $PROFILE_STATUS"
-          test "$PROFILE_STATUS" = "200"
-
-          curl -fsS -c "$RUNNER_TEMP/signin.cookies" "$ORIGIN/signin" -o "$RUNNER_TEMP/signin.html"
-          CSRF=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signin.html" | head -1 | sed 's/.*value="//;s/"$//')
-          test -n "$CSRF"
-
-          LOGIN_STATUS=$(curl -sS -e "$ORIGIN/signin" \
-            -b "$RUNNER_TEMP/signin.cookies" -c "$RUNNER_TEMP/signin.cookies" \
-            -D "$RUNNER_TEMP/signin.headers" -o "$RUNNER_TEMP/signin-result.html" \
-            -w '%{http_code}' \
-            --data-urlencode "csrf_token=$CSRF" \
-            --data-urlencode "identifier=$DEMO_EMAIL" \
-            --data-urlencode "password=$DEMO_PASSWORD" \
-            --data-urlencode "submit=Login" \
-            "$ORIGIN/signin")
-          echo "fresh signin HTTP status: $LOGIN_STATUS"
-          if [ "$LOGIN_STATUS" != "302" ]; then
-            grep -Ei 'invalid|error|text-red' "$RUNNER_TEMP/signin-result.html" | head -80 || true
-            exit 1
-          fi
-
-          PROFILE_STATUS=$(curl -sS \
-            -b "$RUNNER_TEMP/signin.cookies" \
-            -o "$RUNNER_TEMP/profile-after-signin.html" \
-            -w '%{http_code}' \
-            "$ORIGIN/profile/edit")
-          echo "protected profile after fresh signin: $PROFILE_STATUS"
-          test "$PROFILE_STATUS" = "200"
-          echo "FARBI AUTH E2E PASSED"
 
       - name: Publish verified live origin
         id: publish

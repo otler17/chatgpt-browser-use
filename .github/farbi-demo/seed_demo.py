@@ -22,8 +22,16 @@ def ensure_demo_data():
     with app.app_context():
         admin = User.query.filter_by(username="admin_seed").one()
         customer = User.query.filter_by(username="customer_seed").one()
+
+        # The public demo advertises one deterministic password for every role.
+        # Reset all seeded role accounts on every ephemeral PostgreSQL launch so
+        # the browser verification and the credentials shown to the user match.
         admin.email_verified = True
+        admin.is_archived = False
+        admin.set_password(PASSWORD)
         customer.email_verified = True
+        customer.is_archived = False
+        customer.set_password(PASSWORD)
 
         designer = User.query.filter_by(username="designer_seed").first()
         if designer is None:
@@ -39,6 +47,7 @@ def ensure_demo_data():
             db.session.flush()
         else:
             designer.is_designer = True
+            designer.is_archived = False
             designer.email_verified = True
             designer.set_password(PASSWORD)
 

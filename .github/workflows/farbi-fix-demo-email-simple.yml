@@ -1,0 +1,28 @@
+name: Patch FARBI demo emails safely
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-fix-demo-email-simple.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace reserved test email domains
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/demo\.customer@example\.com/farbi.demo.customer@gmail.com/g' .github/workflows/farbi-live-host.yml
+          sed -i 's/demo\.admin@example\.com/farbi.demo.admin@gmail.com/g' .github/workflows/farbi-live-host.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/farbi-live-host.yml
+          git commit -m "Use non-reserved demo email addresses"
+          git push origin HEAD:master

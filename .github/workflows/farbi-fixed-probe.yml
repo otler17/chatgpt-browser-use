@@ -19,6 +19,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "probe revision 2"
           BASE="https://farbi-otler17.trapdoor.sh"
           for ROUTE in / /signin /signup; do
             echo "=== $BASE$ROUTE ==="

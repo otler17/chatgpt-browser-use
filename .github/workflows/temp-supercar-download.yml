@@ -24,7 +24,7 @@ jobs:
           mkdir -p f5_dep_patch
           python -m pip install -U pip
           python -m pip download --dest f5_dep_patch --only-binary=:all: --no-deps \
-            'tokenizers==0.23.0' 'torch-einops-utils>=0.1.12' 'encodec==0.1.1' \
+            'tokenizers==0.23.0rc0' 'torch-einops-utils>=0.1.12' 'encodec==0.1.1' \
             'frozendict' 'hyper-connections>=0.1.8' 'safetensors>=0.8.0'
           ls -lh f5_dep_patch
       - name: Upload dependency patch

@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p out
-          TEXT='ابدأ صباحك بقهوة تستحق اللحظة. إمبر روست، حبوب مختارة ومحمصة بعناية، برائحة غنية ونفحات شوكولاتة ناعمة ومذاق متوازن. كل رشفة تمنحك دفئاً وتركيزاً هادئاً. إمبر روست، بداية أجمل ليومك.'
+          TEXT='ابدأ صباحك بقهوة تستحق اللحظة. إمبر روست، حبوب مختارة ومحمصة بعناية، برائحة غنية ونفحات شوكولاتة ناعمة ومذاق متوازن. نكهة ترافقك من أول رشفة حتى آخرها. كل رشفة تمنحك دفئاً وتركيزاً هادئاً. إمبر روست، بداية أجمل ليومك.'
           REF='كان اللعيب حاضرًا في العديد من الأنشطة والفعاليات المرتبطة بكأس العالم، مما سمح للجماهير بالتفاعل معه والتقاط الصور التذكارية.'
           printf '%s\n' "$TEXT" > out/copy_ar.txt
           habibi-tts_infer-cli \
@@ -48,6 +48,7 @@ jobs:
             --gen_text "$TEXT" \
             --nfe_step 32 \
             --cfg_strength 2.0 \
+            --target_rms 0.07 \
             --speed 1.0 \
             --device cpu \
             --output_dir out \
@@ -87,12 +88,13 @@ jobs:
           ratio=float(P[hi].sum()/total) if total else 0.0
           print('duration',len(x)/sr,'peak',peak,'hf_6_12k_ratio',ratio)
           if abs(len(x)/sr-15.0) > 1/sr: raise SystemExit('duration mismatch')
-          if peak >= 0.999: raise SystemExit('clipping detected')
+          if peak >= 0.985: raise SystemExit('clipping/headroom failure')
           if ratio > 0.20: raise SystemExit('excess high-frequency energy')
           PY
           ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/habibi_msa_coffee_ad_15s.wav
 
       - name: Upload Habibi sample
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: habibi-msa-coffee-ad
@@ -100,7 +102,7 @@ jobs:
             out/habibi_msa_coffee_ad_15s.wav
             out/habibi_msa_raw.wav
             out/copy_ar.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 1
 
-# trigger
+# trigger 2

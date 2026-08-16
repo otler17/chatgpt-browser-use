@@ -47,7 +47,7 @@ jobs:
 
     env:
       APP_ENV: development
-      SECRET_KEY: farbi-verified-demo-secret-20260816
+      SECRET_KEY: farbi-verified-demo-secret-20260816-v4
       DATABASE_URL: postgresql://farbi_user:farbi_password@127.0.0.1:5432/farbi_db
       REDIS_URL: redis://127.0.0.1:6379/0
       PAYMENT_WEBHOOK_SECRET: farbi-verified-demo-webhook
@@ -58,11 +58,11 @@ jobs:
       LOCAL_EMAIL_OUTBOX: instance/offline_emails
       PAYMENT_PROVIDER: mock
       DEMO_PASSWORD: Password123
-      FARBI_PUBLIC_HOST: farbi-demo-otler17.trapdoor.sh
-      FARBI_URL: https://farbi-demo-otler17.trapdoor.sh
-      MAIN_APP_DOMAINS: farbi-demo-otler17.trapdoor.sh,localhost,127.0.0.1
-      PUBLIC_AUTH_ORIGIN: https://farbi-demo-otler17.trapdoor.sh
-      FLASK_SERVER_NAME: farbi-demo-otler17.trapdoor.sh
+      FARBI_PUBLIC_HOST: farbi-demo-otler17-v4.trapdoor.sh
+      FARBI_URL: https://farbi-demo-otler17-v4.trapdoor.sh
+      MAIN_APP_DOMAINS: farbi-demo-otler17-v4.trapdoor.sh,localhost,127.0.0.1
+      PUBLIC_AUTH_ORIGIN: https://farbi-demo-otler17-v4.trapdoor.sh
+      FLASK_SERVER_NAME: farbi-demo-otler17-v4.trapdoor.sh
 
     steps:
       - name: Check out deployment bundle
@@ -88,6 +88,7 @@ jobs:
           cp .github/farbi-demo/seed_demo.py farbi-project/seed_demo.py
           cp .github/farbi-demo/trapdoor_entry.py farbi-project/trapdoor_entry.py
           cp .github/farbi-demo/verify_demo.py farbi-project/verify_demo.py
+          cp .github/farbi-demo/verify_browser.py farbi-project/verify_browser.py
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -98,7 +99,10 @@ jobs:
 
       - name: Install application dependencies
         working-directory: farbi-project
-        run: python -m pip install -r requirements/prod.txt
+        run: |
+          python -m pip install -r requirements/prod.txt
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
 
       - name: Migrate and seed PostgreSQL
         working-directory: farbi-project
@@ -108,7 +112,7 @@ jobs:
           python scripts/seed_integration_data.py
           python seed_demo.py
 
-      - name: Start FARBI and fixed public tunnel
+      - name: Start FARBI and fresh public tunnel
         shell: bash
         run: |
           set -euo pipefail
@@ -123,7 +127,7 @@ jobs:
             trapdoor_entry:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
 
-          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-demo-otler17 \
+          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-demo-otler17-v4 \
             > "$RUNNER_TEMP/trapdoor.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/trapdoor.pid"
 
@@ -143,19 +147,24 @@ jobs:
           cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
           exit 1
 
-      - name: Verify pages, PostgreSQL accounts, roles and signup
+      - name: Verify HTTP pages, PostgreSQL accounts, roles and signup
         working-directory: farbi-project
         run: python verify_demo.py
+
+      - name: Verify real Chromium browser logins
+        working-directory: farbi-project
+        run: python verify_browser.py
 
       - name: Publish verified demo manifest
         shell: bash
         run: |
           set -euo pipefail
           test -f farbi-demo-manifest.json
+          grep -q '"chromium_role_logins_e2e": "passed"' farbi-demo-manifest.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add farbi-demo-manifest.json
-          git commit -m "Publish verified FARBI demo manifest [skip ci]" || true
+          git commit -m "Publish Chromium-verified FARBI demo manifest [skip ci]" || true
           git pull --rebase origin master || true
           git push origin HEAD:master || true
 
@@ -172,7 +181,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "FARBI verified demo: $FARBI_URL"
+          echo "FARBI Chromium-verified demo: $FARBI_URL"
           for i in {1..66}; do
             curl -fsS --max-time 20 "$FARBI_URL/" >/dev/null
             curl -fsS --max-time 20 "$FARBI_URL/browse" >/dev/null

@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/tunis-tourism-arabic-videos.yml'
       - 'scripts/build_tunis_viral_short.py'
+      - 'scripts/build_tunis_viral_short_v2.py'
   workflow_dispatch:
 
 permissions:
@@ -38,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          python scripts/build_tunis_viral_short.py
+          python scripts/build_tunis_viral_short_v2.py
 
       - name: Validate output
         shell: bash

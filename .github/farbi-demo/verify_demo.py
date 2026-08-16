@@ -8,10 +8,10 @@ import requests
 
 from application import User, app
 
-BASE = os.environ.get("FARBI_URL", "https://farbi-demo-otler17.trapdoor.sh").rstrip("/")
+BASE = os.environ.get("FARBI_URL", "https://farbi-demo-otler17-v4.trapdoor.sh").rstrip("/")
 PASSWORD = os.environ.get("DEMO_PASSWORD", "Password123")
 TIMEOUT = 30
-EXPECTED_SESSION_COOKIE = "farbi_demo_session_v3"
+EXPECTED_SESSION_COOKIE = "farbi_demo_session_v4"
 
 
 def url(path):
@@ -34,8 +34,6 @@ def check_public(path):
 
 def login(email, label):
     session = requests.Session()
-    # Reproduce a real tester who may still have Flask's old default `session`
-    # cookie from one of the earlier ephemeral deployments on this same host.
     host = urlparse(BASE).hostname
     session.cookies.set("session", "stale-legacy-demo-cookie", domain=host, path="/")
     require_status(session.get(url("/login"), timeout=TIMEOUT), 200, f"{label} login form")

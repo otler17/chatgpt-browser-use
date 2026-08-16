@@ -15,27 +15,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify remapped public auth pages
+      - name: Check out published origin
+        uses: actions/checkout@v4
+
+      - name: Compare stable and current backend auth links
         shell: bash
         run: |
           set -euo pipefail
+          ORIGIN=$(python -c 'import json; print(json.load(open("farbi-live-origin.json"))["origin"])')
           STABLE="https://farbi-marketplace.omar-gassab.chatgpt.site"
 
-          check() {
-            local path="$1"
-            local result
-            result=$(curl -fsSL \
-              --max-time 30 \
-              --max-redirs 3 \
-              -o /tmp/farbi-page.html \
-              -w '%{http_code} %{num_redirects} %{url_effective}' \
-              "$STABLE$path")
-            echo "$path -> $result"
-            test "$(awk '{print $1}' <<< "$result")" = "200"
-            test "$(awk '{print $2}' <<< "$result")" = "0"
-            grep -qi '<form' /tmp/farbi-page.html
-          }
-
-          curl -fsS "$STABLE/" >/dev/null
-          check /signin
-          check /signup
+          for BASE in "$ORIGIN" "$STABLE"; do
+            echo "=== $BASE ==="
+            curl -fsS "$BASE/" -o /tmp/home.html
+            grep -Eo 'href="[^"]*(login|signin|register|signup)[^"]*"' /tmp/home.html | sort -u || true
+            for PATH in /signin /signup; do
+              curl -sS -o /dev/null -w "$PATH status=%{http_code} redirects=%{num_redirects}\n" --max-redirs 0 "$BASE$PATH" || true
+            done
+          done

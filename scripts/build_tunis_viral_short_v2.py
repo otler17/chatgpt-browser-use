@@ -5,14 +5,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_tunis_viral_short as b
 
-# Shorter editorial cut so the Tunisian Arabic voice stays natural rather than being time-compressed.
+# Tight editorial cut: keep the Tunisian Arabic voice natural and leave breathing room for the visual hook/CTA.
 b.SCRIPT = (
-    "عندك يوم واحد في تونس؟ هذا المسار يكفيك. "
+    "عندك يوم واحد في تونس؟ امشِ معي. "
     "ابدأ من المدينة العتيقة: أزقة، أسواق، وجامع الزيتونة. "
-    "اخرج من باب البحر وامشِ في شارع الحبيب بورقيبة. "
-    "بعدها اتجه إلى سيدي بوسعيد، الأبيض والأزرق فوق البحر، وخذ قهوة على مهل. "
-    "وقبل الغروب، مرّ على آثار قرطاج. "
-    "احفظ الفيديو؛ هذا برنامج يوم كامل في تونس."
+    "اخرج من باب البحر إلى شارع الحبيب بورقيبة. "
+    "بعدها اتجه إلى سيدي بوسعيد، أبيض وأزرق فوق البحر. "
+    "وقبل الغروب، مرّ على قرطاج. "
+    "احفظ الفيديو لرحلتك إلى تونس."
 )
 
 if __name__ == "__main__":

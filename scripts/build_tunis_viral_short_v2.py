@@ -1,5 +1,9 @@
 import asyncio
-import scripts.build_tunis_viral_short as b
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build_tunis_viral_short as b
 
 # Shorter editorial cut so the Tunisian Arabic voice stays natural rather than being time-compressed.
 b.SCRIPT = (

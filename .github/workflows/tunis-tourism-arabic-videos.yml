@@ -1,0 +1,62 @@
+name: Build three Arabic Tunis tourism videos
+
+on:
+  push:
+    branches: [tunis-tourism-videos]
+    paths:
+      - '.github/workflows/tunis-tourism-arabic-videos.yml'
+      - 'scripts/build_tunis_tourism_videos.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install render dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          python -m pip install edge-tts gTTS requests
+
+      - name: Render videos
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python scripts/build_tunis_tourism_videos.py
+
+      - name: Validate outputs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ls -lh outputs
+          for f in outputs/*.mp4; do
+            ffprobe -v error -show_entries format=filename,duration,size -of json "$f"
+          done
+          test "$(find outputs -maxdepth 1 -name '*.mp4' | wc -l)" -eq 3
+
+      - name: Upload rendered videos
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunis-tourism-arabic-30s
+          path: |
+            outputs/*.mp4
+            outputs/credits.json
+            outputs/scripts.json
+          if-no-files-found: error
+          retention-days: 3

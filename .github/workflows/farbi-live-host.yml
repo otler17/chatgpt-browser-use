@@ -1,15 +1,16 @@
-name: FARBI verified auth host
+name: FARBI verified full demo
 
 on:
   push:
     branches: [master]
     paths:
       - ".github/workflows/farbi-live-host.yml"
+      - ".github/farbi-demo/**"
       - ".github/farbi-bundle/**"
   workflow_dispatch:
 
 concurrency:
-  group: farbi-fixed-live-host
+  group: farbi-verified-full-demo-live
   cancel-in-progress: true
 
 permissions:
@@ -19,7 +20,7 @@ permissions:
 jobs:
   farbi:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
     services:
       postgres:
         image: postgres:16
@@ -46,26 +47,28 @@ jobs:
 
     env:
       APP_ENV: development
-      SECRET_KEY: farbi-demo-fixed-secret-20260816
+      SECRET_KEY: farbi-verified-demo-secret-20260816
       DATABASE_URL: postgresql://farbi_user:farbi_password@127.0.0.1:5432/farbi_db
       REDIS_URL: redis://127.0.0.1:6379/0
-      PAYMENT_WEBHOOK_SECRET: farbi-demo-webhook
+      PAYMENT_WEBHOOK_SECRET: farbi-verified-demo-webhook
       OFFLINE_LOCAL_MODE: "true"
       STORAGE_BACKEND: local
       LOCAL_UPLOAD_ROOT: instance/local_uploads
       EMAIL_BACKEND: local
       LOCAL_EMAIL_OUTBOX: instance/offline_emails
       PAYMENT_PROVIDER: mock
-      MAIN_APP_DOMAINS: farbi-otler17.trapdoor.sh,localhost,127.0.0.1
-      PUBLIC_AUTH_ORIGIN: https://farbi-otler17.trapdoor.sh
-      FARBI_FIXED_URL: https://farbi-otler17.trapdoor.sh
+      DEMO_PASSWORD: Password123
+      FARBI_PUBLIC_HOST: farbi-demo-otler17.trapdoor.sh
+      FARBI_URL: https://farbi-demo-otler17.trapdoor.sh
+      MAIN_APP_DOMAINS: farbi-demo-otler17.trapdoor.sh,localhost,127.0.0.1
+      PUBLIC_AUTH_ORIGIN: https://farbi-demo-otler17.trapdoor.sh
+      FLASK_SERVER_NAME: farbi-demo-otler17.trapdoor.sh
 
     steps:
-      - name: Check out runtime bundle
+      - name: Check out deployment bundle
         uses: actions/checkout@v4
 
-      - name: Restore exact FARBI project
-        id: restore
+      - name: Restore exact FARBI source
         shell: bash
         run: |
           set -euo pipefail
@@ -82,39 +85,9 @@ jobs:
           mkdir farbi-project
           unzip -q farbi-project.zip -d farbi-project
           test -f farbi-project/application.py
-          test -f farbi-project/scripts/seed_integration_data.py
-
-      - name: Adapt auth routes and CSRF markup for fixed host
-        working-directory: farbi-project
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          app_path = Path("application.py")
-          source = app_path.read_text(encoding="utf-8")
-
-          guard = "def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
-          offline_guard = "def require_platform_host_for_auth():\n    if current_app.config.get('OFFLINE_LOCAL_MODE'):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
-          if guard in source:
-              source = source.replace(guard, offline_guard, 1)
-
-          register = "@app.route('/register', methods=['GET', 'POST'])"
-          login = "@app.route('/login', methods=['GET', 'POST'])"
-          if register not in source or login not in source:
-              raise SystemExit("Expected auth route decorators not found")
-          source = source.replace(register, "@app.route('/signup', methods=['GET', 'POST'])", 1)
-          source = source.replace(login, "@app.route('/signin', methods=['GET', 'POST'])", 1)
-          app_path.write_text(source, encoding="utf-8")
-
-          duplicate_csrf = '        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">\n'
-          for template_name in ("templates/register.html", "templates/login.html"):
-              path = Path(template_name)
-              html = path.read_text(encoding="utf-8")
-              html = html.replace(duplicate_csrf, "", 1)
-              path.write_text(html, encoding="utf-8")
-          PY
+          cp .github/farbi-demo/seed_demo.py farbi-project/seed_demo.py
+          cp .github/farbi-demo/trapdoor_entry.py farbi-project/trapdoor_entry.py
+          cp .github/farbi-demo/verify_demo.py farbi-project/verify_demo.py
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -124,50 +97,23 @@ jobs:
           cache-dependency-path: farbi-project/requirements/prod.txt
 
       - name: Install application dependencies
-        id: dependencies
         working-directory: farbi-project
         run: python -m pip install -r requirements/prod.txt
 
       - name: Migrate and seed PostgreSQL
-        id: database
         working-directory: farbi-project
         run: |
           set -euo pipefail
           python -m flask --app application db upgrade
           python scripts/seed_integration_data.py
+          python seed_demo.py
 
-      - name: Start fixed public FARBI host
-        id: tunnel
+      - name: Start FARBI and fixed public tunnel
         shell: bash
         run: |
           set -euo pipefail
           curl -fsSL https://trapdoor.sh/install.sh | sh
 
-          cat > farbi-project/trapdoor_entry.py <<'PY'
-          from application import app
-
-          PUBLIC_HOST = "farbi-otler17.trapdoor.sh"
-          INTERNAL_HOST = "localhost:8000"
-
-          class TrapdoorPublicHost:
-              def __init__(self, wrapped):
-                  self.wrapped = wrapped
-
-              def __call__(self, environ, start_response):
-                  if environ.get("HTTP_HOST", "").lower() == INTERNAL_HOST:
-                      environ["HTTP_HOST"] = PUBLIC_HOST
-                      environ["SERVER_NAME"] = PUBLIC_HOST
-                      environ["SERVER_PORT"] = "443"
-                      environ["wsgi.url_scheme"] = "https"
-                  return self.wrapped(environ, start_response)
-
-          app.config["PREFERRED_URL_SCHEME"] = "https"
-          app.wsgi_app = TrapdoorPublicHost(app.wsgi_app)
-          PY
-
-          FLASK_SERVER_NAME="farbi-otler17.trapdoor.sh" \
-          MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,localhost,127.0.0.1" \
-          PUBLIC_AUTH_ORIGIN="$FARBI_FIXED_URL" \
           RUNNER_TRACKING_ID="" nohup gunicorn \
             --chdir farbi-project \
             --bind 127.0.0.1:8000 \
@@ -177,161 +123,61 @@ jobs:
             trapdoor_entry:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
 
-          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-otler17 \
+          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-demo-otler17 \
             > "$RUNNER_TEMP/trapdoor.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/trapdoor.pid"
 
           for i in {1..90}; do
-            if curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null && \
-               curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null && \
-               curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null; then
-              echo "FARBI public pages are reachable."
+            if curl -fsS --max-time 20 "$FARBI_URL/" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_URL/browse" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_URL/login" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_URL/register" >/dev/null; then
+              echo "FARBI public demo is reachable at $FARBI_URL"
               exit 0
             fi
             sleep 2
           done
+          echo "=== trapdoor ==="
           cat "$RUNNER_TEMP/trapdoor.log" || true
+          echo "=== gunicorn ==="
           cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
           exit 1
 
-      - name: Verify browser signup, PostgreSQL and fresh signin
-        id: auth_e2e
+      - name: Verify pages, PostgreSQL accounts, roles and signup
         working-directory: farbi-project
+        run: python verify_demo.py
+
+      - name: Publish verified demo manifest
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import os
-          import requests
-          from bs4 import BeautifulSoup
-          from application import app, User
-
-          origin = os.environ["FARBI_FIXED_URL"].rstrip("/")
-          run_id = os.environ["GITHUB_RUN_ID"]
-          username = f"demo{run_id}"
-          email = f"farbi.demo.{run_id}@gmail.com"
-          password = f"FarbiDemo-{run_id}!"
-
-          def get_auth_form(html, route):
-              soup = BeautifulSoup(html, "html.parser")
-              for form in soup.find_all("form"):
-                  action = (form.get("action") or "").rstrip("/")
-                  if action == route or action.endswith(route):
-                      return form
-              raise AssertionError(f"Auth form for {route} not found")
-
-          def form_payload(form):
-              payload = {}
-              for field in form.find_all(["input", "select", "textarea"]):
-                  name = field.get("name")
-                  if not name:
-                      continue
-                  if field.name == "input":
-                      field_type = (field.get("type") or "text").lower()
-                      if field_type in {"checkbox", "radio"} and not field.has_attr("checked"):
-                          continue
-                      payload[name] = field.get("value", "")
-                  elif field.name == "textarea":
-                      payload[name] = field.get_text()
-                  elif field.name == "select":
-                      selected = field.find("option", selected=True) or field.find("option")
-                      payload[name] = selected.get("value", "") if selected else ""
-              return payload
-
-          signup = requests.Session()
-          response = signup.get(origin + "/signup", timeout=30)
-          response.raise_for_status()
-          form = get_auth_form(response.text, "/signup")
-          payload = form_payload(form)
-          payload.update({
-              "username": username,
-              "email": email,
-              "password": password,
-              "confirm_password": password,
-          })
-          response = signup.post(
-              origin + "/signup",
-              data=payload,
-              headers={"Referer": origin + "/signup"},
-              allow_redirects=False,
-              timeout=30,
-          )
-          print("signup status:", response.status_code, "location:", response.headers.get("Location"))
-          if response.status_code not in (302, 303):
-              soup = BeautifulSoup(response.text, "html.parser")
-              errors = [node.get_text(" ", strip=True) for node in soup.select("form span.text-red-500")]
-              print("signup validation messages:", errors)
-              raise AssertionError("signup form did not redirect")
-
-          with app.app_context():
-              user = User.query.filter_by(email=email).one_or_none()
-              assert user is not None, "registered user missing from PostgreSQL"
-              assert user.check_password(password), "password hash verification failed"
-              print({"postgres_user_id": user.id, "email": user.email})
-
-          response = signup.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
-          print("protected profile after signup:", response.status_code)
-          assert response.status_code == 200, "signup session did not authenticate protected route"
-
-          signin = requests.Session()
-          response = signin.get(origin + "/signin", timeout=30)
-          response.raise_for_status()
-          form = get_auth_form(response.text, "/signin")
-          payload = form_payload(form)
-          payload.update({"identifier": email, "password": password})
-          response = signin.post(
-              origin + "/signin",
-              data=payload,
-              headers={"Referer": origin + "/signin"},
-              allow_redirects=False,
-              timeout=30,
-          )
-          print("fresh signin status:", response.status_code, "location:", response.headers.get("Location"))
-          assert response.status_code in (302, 303), "fresh signin did not redirect"
-
-          response = signin.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
-          print("protected profile after fresh signin:", response.status_code)
-          assert response.status_code == 200, "fresh signin did not authenticate protected route"
-          print("FARBI AUTH E2E PASSED")
-          PY
-
-      - name: Publish verified live origin
-        id: publish
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          from datetime import datetime, timezone
-
-          payload = {
-              "origin": os.environ["FARBI_FIXED_URL"],
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "published_at": datetime.now(timezone.utc).isoformat(),
-              "auth_routes": {"signin": "/signin", "signup": "/signup"},
-              "postgres_auth_e2e": "passed"
-          }
-          with open("farbi-live-origin.json", "w", encoding="utf-8") as handle:
-              json.dump(payload, handle, indent=2)
-              handle.write("\n")
-          PY
+          test -f farbi-demo-manifest.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add farbi-live-origin.json
-          git commit -m "Publish verified FARBI auth origin [skip ci]" || true
+          git add farbi-demo-manifest.json
+          git commit -m "Publish verified FARBI demo manifest [skip ci]" || true
           git pull --rebase origin master || true
           git push origin HEAD:master || true
 
-      - name: Keep verified FARBI online
+      - name: Publish failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "=== trapdoor ==="
+          tail -n 250 "$RUNNER_TEMP/trapdoor.log" 2>/dev/null || true
+          echo "=== gunicorn ==="
+          tail -n 250 "$RUNNER_TEMP/farbi-gunicorn.log" 2>/dev/null || true
+
+      - name: Keep verified FARBI demo online
         shell: bash
         run: |
           set -euo pipefail
-          echo "FARBI LIVE: $FARBI_FIXED_URL"
+          echo "FARBI verified demo: $FARBI_URL"
           for i in {1..66}; do
-            curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null
-            curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null
-            curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_URL/" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_URL/browse" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_URL/login" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_URL/register" >/dev/null
             echo "heartbeat $i"
             sleep 300
           done

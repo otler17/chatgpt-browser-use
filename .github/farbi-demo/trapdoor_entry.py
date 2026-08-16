@@ -1,15 +1,13 @@
 import os
 
-from flask import flash, redirect, render_template, request, session, url_for
+from flask import flash, redirect, render_template, request, session
 from flask_login import current_user, login_user
 from sqlalchemy import func, or_
 
 from application import LoginForm, RegistrationForm, User, app, db
 
-# This wrapper is used only by the temporary GitHub-hosted demo. It bypasses
-# Flask-WTF validation on the two demo auth POSTs because the tunnel rewrites
-# origin/host metadata. Password checks and persistence still use FARBI's real
-# User model and PostgreSQL database.
+# Demo-only compatibility layer for the temporary reverse tunnel. Persistence,
+# password hashing and role checks still use FARBI's real User model/PostgreSQL.
 app.config["WTF_CSRF_ENABLED"] = False
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
@@ -17,13 +15,20 @@ app.config["PREFERRED_URL_SCHEME"] = "https"
 def demo_register():
     form = RegistrationForm()
     if current_user.is_authenticated:
-        return redirect(url_for("index"))
+        return redirect("/", code=302)
 
     if request.method == "POST":
         username = (request.form.get("username") or "").strip().lower()
         email = (request.form.get("email") or "").strip().lower()
         password = request.form.get("password") or ""
         confirmation = request.form.get("confirm_password") or ""
+        app.logger.warning(
+            "DEMO_REGISTER endpoint=%s keys=%s username=%s email=%s",
+            request.endpoint,
+            sorted(request.form.keys()),
+            username,
+            email,
+        )
         error = None
 
         if len(username) < 3:
@@ -40,6 +45,7 @@ def demo_register():
             error = "Email already exists."
 
         if error:
+            app.logger.warning("DEMO_REGISTER rejected reason=%s", error)
             flash(error, "danger")
         else:
             user = User(
@@ -51,10 +57,10 @@ def demo_register():
             user.set_password(password)
             db.session.add(user)
             db.session.commit()
-            login_user(user)
+            login_user(user, force=True)
             session["auth_version"] = int(user.auth_version or 1)
-            flash("Demo registration successful.", "success")
-            return redirect(url_for("index"))
+            app.logger.warning("DEMO_REGISTER success user_id=%s", user.id)
+            return redirect("/", code=302)
 
     return render_template("register.html", form=form)
 
@@ -62,7 +68,7 @@ def demo_register():
 def demo_login():
     form = LoginForm()
     if current_user.is_authenticated:
-        return redirect(url_for("index"))
+        return redirect("/", code=302)
 
     if request.method == "POST":
         identifier = (request.form.get("identifier") or "").strip()
@@ -73,18 +79,39 @@ def demo_login():
                 func.lower(User.username) == func.lower(identifier),
             )
         ).first()
+        password_ok = bool(user and user.check_password(password))
+        archived = bool(user and user.is_archived)
+        app.logger.warning(
+            "DEMO_LOGIN endpoint=%s keys=%s identifier=%s found=%s password_ok=%s archived=%s",
+            request.endpoint,
+            sorted(request.form.keys()),
+            identifier,
+            bool(user),
+            password_ok,
+            archived,
+        )
 
-        if user and user.check_password(password) and not user.is_archived:
-            login_user(user, remember=bool(request.form.get("remember")))
+        if user and password_ok and not archived:
+            login_user(user, remember=bool(request.form.get("remember")), force=True)
             session["auth_version"] = int(user.auth_version or 1)
-            return redirect(url_for("index"))
+            app.logger.warning("DEMO_LOGIN success user_id=%s session_user=%s", user.id, session.get("_user_id"))
+            return redirect("/", code=302)
         flash("Invalid credentials.", "danger")
 
     return render_template("login.html", form=form)
 
 
-app.view_functions["register"] = demo_register
-app.view_functions["login"] = demo_login
+# Resolve endpoints from the URL map instead of assuming their names. This also
+# guards against endpoint renames in the restored source bundle.
+login_endpoints = [rule.endpoint for rule in app.url_map.iter_rules() if rule.rule == "/login"]
+register_endpoints = [rule.endpoint for rule in app.url_map.iter_rules() if rule.rule == "/register"]
+if not login_endpoints or not register_endpoints:
+    raise RuntimeError(f"FARBI auth routes missing login={login_endpoints} register={register_endpoints}")
+for endpoint in login_endpoints:
+    app.view_functions[endpoint] = demo_login
+for endpoint in register_endpoints:
+    app.view_functions[endpoint] = demo_register
+app.logger.warning("DEMO_AUTH overrides login=%s register=%s", login_endpoints, register_endpoints)
 
 PUBLIC_HOST = os.environ.get("FARBI_PUBLIC_HOST", "farbi-demo-otler17.trapdoor.sh")
 INTERNAL_HOST = "localhost:8000"

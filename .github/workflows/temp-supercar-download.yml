@@ -1,4 +1,4 @@
-name: Temporary F5-TTS local runtime bundle
+name: Temporary F5-TTS split local bundle
 
 on:
   push:
@@ -18,43 +18,65 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Build portable F5-TTS bundle
+      - name: Build F5-TTS runtime and split checkpoint
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p f5_bundle/wheels f5_bundle/models/f5 f5_bundle/models/vocos
-          git clone --depth 1 https://github.com/SWivid/F5-TTS.git f5_bundle/F5-TTS
+          mkdir -p f5_runtime/wheels f5_runtime/models/f5 f5_runtime/models/vocos f5_parts
+          git clone --depth 1 https://github.com/SWivid/F5-TTS.git f5_runtime/F5-TTS
           python -m pip install -U pip huggingface_hub
           python - <<'PY'
           from huggingface_hub import hf_hub_download, snapshot_download
-          hf_hub_download(
-              repo_id='SWivid/F5-TTS',
-              filename='F5TTS_v1_Base/model_1250000.safetensors',
-              local_dir='f5_bundle/models/f5',
-          )
-          hf_hub_download(
-              repo_id='SWivid/F5-TTS',
-              filename='F5TTS_v1_Base/vocab.txt',
-              local_dir='f5_bundle/models/f5',
-          )
-          snapshot_download(
-              repo_id='charactr/vocos-mel-24khz',
-              local_dir='f5_bundle/models/vocos',
-              allow_patterns=['config.yaml', 'pytorch_model.bin'],
-          )
+          hf_hub_download(repo_id='SWivid/F5-TTS', filename='F5TTS_v1_Base/model_1250000.safetensors', local_dir='f5_runtime/models/f5')
+          hf_hub_download(repo_id='SWivid/F5-TTS', filename='F5TTS_v1_Base/vocab.txt', local_dir='f5_runtime/models/f5')
+          snapshot_download(repo_id='charactr/vocos-mel-24khz', local_dir='f5_runtime/models/vocos', allow_patterns=['config.yaml', 'pytorch_model.bin'])
           PY
-          python -m pip download --dest f5_bundle/wheels --only-binary=:all: --no-deps \
+          python -m pip download --dest f5_runtime/wheels --only-binary=:all: --no-deps \
             'transformers' 'tokenizers' 'vocos' 'x-transformers>=1.31.14' \
             'torchdiffeq' 'pypinyin' 'rjieba' 'ema-pytorch>=0.5.2' \
             'einx' 'rotary-embedding-torch' 'beartype' 'vector-quantize-pytorch' \
             'local-attention' 'gateloop-transformer'
-          du -sh f5_bundle
-          find f5_bundle -maxdepth 3 -type f -printf '%p %k KB\n' | sort | tail -40
+          MODEL='f5_runtime/models/f5/F5TTS_v1_Base/model_1250000.safetensors'
+          split -b 280M -d -a 2 "$MODEL" f5_parts/model.part-
+          rm "$MODEL"
+          ls -lh f5_parts
+          du -sh f5_runtime
 
-      - name: Upload F5-TTS bundle
+      - name: Upload F5 runtime
         uses: actions/upload-artifact@v4
         with:
-          name: f5-tts-v1-local-bundle
-          path: f5_bundle
+          name: f5-runtime
+          path: f5_runtime
           if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload model part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: f5-model-00
+          path: f5_parts/model.part-00
+          retention-days: 1
+      - name: Upload model part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: f5-model-01
+          path: f5_parts/model.part-01
+          retention-days: 1
+      - name: Upload model part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: f5-model-02
+          path: f5_parts/model.part-02
+          retention-days: 1
+      - name: Upload model part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: f5-model-03
+          path: f5_parts/model.part-03
+          retention-days: 1
+      - name: Upload model part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: f5-model-04
+          path: f5_parts/model.part-04
           retention-days: 1

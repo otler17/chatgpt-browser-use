@@ -24,12 +24,20 @@ jobs:
           from pathlib import Path
           p = Path('.github/workflows/farbi-live-host.yml')
           s = p.read_text(encoding='utf-8')
-          marker = '''          test -f farbi-project/migrations/versions/000000000001_baseline_schema.py\n\n      - name: Adapt auth routes for stable tunnel hosting\n'''
-          insert = '''          test -f farbi-project/migrations/versions/000000000001_baseline_schema.py\n\n      - name: Upload restored FARBI source for validation\n        uses: actions/upload-artifact@v4\n        with:\n          name: farbi-restored-source\n          path: farbi-project.zip\n          if-no-files-found: error\n          retention-days: 1\n\n      - name: Adapt auth routes for stable tunnel hosting\n'''
+          needle = '      - name: Adapt auth routes for stable tunnel hosting\n'
+          artifact = '''      - name: Upload restored FARBI source for validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: farbi-restored-source
+          path: farbi-project.zip
+          if-no-files-found: error
+          retention-days: 1
+
+'''
           if 'name: Upload restored FARBI source for validation' not in s:
-              if marker not in s:
-                  raise SystemExit('restore marker not found')
-              s = s.replace(marker, insert, 1)
+              if needle not in s:
+                  raise SystemExit('auth-route step marker not found')
+              s = s.replace(needle, artifact + needle, 1)
               p.write_text(s, encoding='utf-8')
           PY
           git config user.name "github-actions[bot]"

@@ -1,7 +1,10 @@
 import os
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
-from flask import flash, redirect, render_template, request, session
+from bs4 import BeautifulSoup
+from flask import flash, g, redirect, render_template, request, session
 from flask_login import current_user, login_user
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import func, or_
 
 from application import LoginForm, RegistrationForm, User, app, db
@@ -11,16 +14,24 @@ from application import LoginForm, RegistrationForm, User, app, db
 app.config["WTF_CSRF_ENABLED"] = False
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# Fresh host-only cookies for the v4 public demo hostname. The deployment is
-# only considered healthy after Chromium stores this cookie and opens protected
-# pages with it.
-app.config["SESSION_COOKIE_NAME"] = "farbi_demo_session_v4"
+PUBLIC_HOST = os.environ.get("FARBI_PUBLIC_HOST", "farbi-demo-otler17-v5.trapdoor.sh")
+INTERNAL_HOST = "localhost:8000"
+ACCESS_PARAM = "farbi_access"
+ACCESS_MAX_AGE = 8 * 60 * 60
+ACCESS_SERIALIZER = URLSafeTimedSerializer(
+    app.config["SECRET_KEY"], salt="farbi-demo-cookieless-v5"
+)
+
+# Normal cookies remain enabled for ordinary browsers, but v5 no longer relies
+# on them. A signed URL token is propagated through links/forms/redirects and
+# can authenticate every request even when a sandbox discards all cookies.
+app.config["SESSION_COOKIE_NAME"] = "farbi_demo_session_v5"
 app.config["SESSION_COOKIE_DOMAIN"] = None
 app.config["SESSION_COOKIE_PATH"] = "/"
 app.config["SESSION_COOKIE_SECURE"] = True
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["REMEMBER_COOKIE_NAME"] = "farbi_demo_remember_v4"
+app.config["REMEMBER_COOKIE_NAME"] = "farbi_demo_remember_v5"
 app.config["REMEMBER_COOKIE_DOMAIN"] = None
 app.config["REMEMBER_COOKIE_PATH"] = "/"
 app.config["REMEMBER_COOKIE_SECURE"] = True
@@ -28,10 +39,99 @@ app.config["REMEMBER_COOKIE_HTTPONLY"] = True
 app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
 
 
+def make_access_token(user):
+    return ACCESS_SERIALIZER.dumps(
+        {"uid": int(user.id), "av": int(user.auth_version or 1)}
+    )
+
+
+def load_access_user(token):
+    if not token:
+        return None
+    try:
+        payload = ACCESS_SERIALIZER.loads(token, max_age=ACCESS_MAX_AGE)
+        user = db.session.get(User, int(payload["uid"]))
+    except (BadSignature, SignatureExpired, KeyError, TypeError, ValueError):
+        return None
+    if not user or user.is_archived:
+        return None
+    if int(user.auth_version or 1) != int(payload.get("av", 1)):
+        return None
+    return user
+
+
+def token_from_request():
+    token = request.args.get(ACCESS_PARAM)
+    if token:
+        return token
+    # Same-origin browser fetch/XHR requests normally carry the full current
+    # page URL as Referer. This lets APIs inherit cookieless demo auth without
+    # modifying every JavaScript call in the original FARBI bundle.
+    referer = request.headers.get("Referer") or ""
+    if referer:
+        values = parse_qs(urlsplit(referer).query).get(ACCESS_PARAM)
+        if values:
+            return values[0]
+    return None
+
+
+def demo_access_before_request():
+    token = token_from_request()
+    user = load_access_user(token)
+    g.farbi_access_token = token if user else None
+    if user:
+        # Flask-Login resolves current_user from g._login_user first. Installing
+        # the user here means login_required/role checks work without a session
+        # cookie for this request.
+        g._login_user = user
+
+
+# Run before the original application's before_request guards so an authenticated
+# demo user is visible to every existing login/role check.
+app.before_request_funcs.setdefault(None, []).insert(0, demo_access_before_request)
+
+
+def add_access_to_url(raw_url, token):
+    if not raw_url or not token:
+        return raw_url
+    if raw_url.startswith(("#", "mailto:", "tel:", "javascript:", "data:")):
+        return raw_url
+    parts = urlsplit(raw_url)
+    if parts.scheme and parts.scheme not in {"http", "https"}:
+        return raw_url
+    if parts.netloc and parts.netloc.lower() not in {
+        request.host.lower(),
+        PUBLIC_HOST.lower(),
+    }:
+        return raw_url
+    if parts.path.rstrip("/") == "/logout":
+        return raw_url
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != ACCESS_PARAM]
+    query.append((ACCESS_PARAM, token))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 @app.after_request
-def demo_no_cache(response):
-    # Prevent an intermediary/browser from reusing an anonymous index or auth
-    # response immediately after the session changes.
+def demo_access_response(response):
+    # Logout intentionally drops cookieless access instead of immediately
+    # re-authenticating the user on the redirect target.
+    token = None if request.path.rstrip("/") == "/logout" else getattr(g, "farbi_access_token", None)
+
+    location = response.headers.get("Location")
+    if token and location:
+        response.headers["Location"] = add_access_to_url(location, token)
+
+    content_type = response.headers.get("Content-Type", "")
+    if token and "text/html" in content_type and response.get_data():
+        soup = BeautifulSoup(response.get_data(as_text=True), "html.parser")
+        for tag in soup.find_all(href=True):
+            tag["href"] = add_access_to_url(tag.get("href"), token)
+        for tag in soup.find_all(action=True):
+            tag["action"] = add_access_to_url(tag.get("action"), token)
+        for tag in soup.find_all(formaction=True):
+            tag["formaction"] = add_access_to_url(tag.get("formaction"), token)
+        response.set_data(str(soup))
+
     if request.path in {"/", "/login", "/register"} or request.path.startswith(("/profile", "/designer", "/admin")):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
@@ -42,7 +142,8 @@ def demo_no_cache(response):
 def demo_register():
     form = RegistrationForm()
     if request.method == "GET" and current_user.is_authenticated:
-        return redirect("/", code=302)
+        token = getattr(g, "farbi_access_token", None) or make_access_token(current_user)
+        return redirect(add_access_to_url("/", token), code=302)
 
     if request.method == "POST":
         username = (request.form.get("username") or "").strip().lower()
@@ -79,7 +180,9 @@ def demo_register():
             session.clear()
             login_user(user, force=True)
             session["auth_version"] = int(user.auth_version or 1)
-            return redirect("/", code=302)
+            token = make_access_token(user)
+            g.farbi_access_token = token
+            return redirect(add_access_to_url("/", token), code=302)
 
     return render_template("register.html", form=form)
 
@@ -87,7 +190,8 @@ def demo_register():
 def demo_login():
     form = LoginForm()
     if request.method == "GET" and current_user.is_authenticated:
-        return redirect("/", code=302)
+        token = getattr(g, "farbi_access_token", None) or make_access_token(current_user)
+        return redirect(add_access_to_url("/", token), code=302)
 
     if request.method == "POST":
         identifier = (request.form.get("identifier") or "").strip()
@@ -110,13 +214,18 @@ def demo_login():
         )
 
         if user and password_ok and not archived:
+            # Keep normal Flask-Login behavior for browsers that support cookies,
+            # but also redirect with a signed access token. The token is enough
+            # on its own, so cookie-blocking sandboxes remain authenticated.
             session.clear()
             login_user(user, remember=bool(request.form.get("remember")), force=True)
             session["auth_version"] = int(user.auth_version or 1)
             session["farbi_demo_role"] = (
                 "admin" if user.is_admin else "designer" if user.is_designer else "customer"
             )
-            return redirect("/", code=302)
+            token = make_access_token(user)
+            g.farbi_access_token = token
+            return redirect(add_access_to_url("/", token), code=302)
         flash("Invalid credentials.", "danger")
 
     return render_template("login.html", form=form)
@@ -132,8 +241,25 @@ for endpoint in register_endpoints:
     app.view_functions[endpoint] = demo_register
 app.logger.warning("DEMO_AUTH overrides login=%s register=%s", login_endpoints, register_endpoints)
 
-PUBLIC_HOST = os.environ.get("FARBI_PUBLIC_HOST", "farbi-demo-otler17-v4.trapdoor.sh")
-INTERNAL_HOST = "localhost:8000"
+
+ROLE_EMAILS = {
+    "customer": "customer_seed@example.com",
+    "designer": "designer_seed@example.com",
+    "admin": "admin_seed@example.com",
+}
+
+
+@app.get("/demo-access/<role>")
+def demo_access_start(role):
+    email = ROLE_EMAILS.get(role.lower())
+    if not email:
+        return "Unknown FARBI demo role", 404
+    user = User.query.filter(func.lower(User.email) == email.lower()).first()
+    if not user or user.is_archived:
+        return "FARBI demo account unavailable", 503
+    token = make_access_token(user)
+    g.farbi_access_token = token
+    return redirect(add_access_to_url("/", token), code=302)
 
 
 class TrapdoorPublicHost:

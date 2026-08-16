@@ -1,0 +1,43 @@
+name: Temporary NAFNet + Real-ESRGAN setup
+on:
+  push:
+    paths:
+      - '.github/workflows/temp-nafnet-esrgan-setup.yml'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download official NAFNet and Real-ESRGAN bundles
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://github.com/megvii-research/NAFNet.git nafnet_bundle
+          python3 -m pip install --upgrade pip gdown
+          mkdir -p nafnet_bundle/experiments/pretrained_models
+          gdown --fuzzy 'https://drive.google.com/file/d/1S0PVRbyTakYY9a82kujgZLbMihfNBLfC/view?usp=sharing' -O nafnet_bundle/experiments/pretrained_models/NAFNet-GoPro-width64.pth
+
+          git clone --depth 1 https://github.com/xinntao/Real-ESRGAN.git realesrgan_bundle
+          mkdir -p realesrgan_bundle/weights
+          wget -q 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth' -O realesrgan_bundle/weights/RealESRGAN_x4plus.pth
+
+          python3 - <<'PY'
+          import os
+          for p in [
+              'nafnet_bundle/experiments/pretrained_models/NAFNet-GoPro-width64.pth',
+              'realesrgan_bundle/weights/RealESRGAN_x4plus.pth']:
+              print(p, os.path.getsize(p))
+              assert os.path.getsize(p) > 1_000_000
+          PY
+
+      - name: Upload restoration bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nafnet-esrgan-bundle
+          path: |
+            nafnet_bundle
+            realesrgan_bundle
+          if-no-files-found: error
+          retention-days: 1

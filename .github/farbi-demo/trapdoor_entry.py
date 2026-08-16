@@ -1,8 +1,10 @@
+import json
 import os
+from html import escape
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
-from flask import flash, g, redirect, render_template, request, session
+from flask import flash, g, make_response, render_template, request, session
 from flask_login import current_user, login_user
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from sqlalchemy import func, or_
@@ -64,9 +66,8 @@ def token_from_request():
     token = request.args.get(ACCESS_PARAM)
     if token:
         return token
-    # Same-origin browser fetch/XHR requests normally carry the full current
-    # page URL as Referer. This lets APIs inherit cookieless demo auth without
-    # modifying every JavaScript call in the original FARBI bundle.
+    # Same-origin fetch/XHR calls inherit auth from the current page URL through
+    # the Referer header, so the original FARBI JavaScript does not need edits.
     referer = request.headers.get("Referer") or ""
     if referer:
         values = parse_qs(urlsplit(referer).query).get(ACCESS_PARAM)
@@ -81,13 +82,12 @@ def demo_access_before_request():
     g.farbi_access_token = token if user else None
     if user:
         # Flask-Login resolves current_user from g._login_user first. Installing
-        # the user here means login_required/role checks work without a session
-        # cookie for this request.
+        # the user here makes every existing login_required/role check work
+        # without any browser cookie.
         g._login_user = user
 
 
-# Run before the original application's before_request guards so an authenticated
-# demo user is visible to every existing login/role check.
+# Run before FARBI's existing before_request guards.
 app.before_request_funcs.setdefault(None, []).insert(0, demo_access_before_request)
 
 
@@ -111,12 +111,45 @@ def add_access_to_url(raw_url, token):
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
+def client_navigate(raw_url, token, message="Signing you in…"):
+    """Return HTTP 200 and let the browser navigate itself.
+
+    Trapdoor follows upstream 302 responses internally, which hides the redirect
+    URL from the real browser. A 200 response with both meta refresh and JS keeps
+    navigation on the client side, so the signed token reaches the address bar
+    even when cookies are blocked and the proxy consumes backend redirects.
+    """
+    target = add_access_to_url(raw_url, token)
+    safe_target = escape(target, quote=True)
+    js_target = json.dumps(target)
+    body = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="cache-control" content="no-store">
+<meta http-equiv="refresh" content="0;url={safe_target}">
+<title>FARBI demo access</title>
+</head>
+<body data-farbi-target="{safe_target}">
+<p>{escape(message)}</p>
+<p><a href="{safe_target}">Continue to FARBI</a></p>
+<script>window.location.replace({js_target});</script>
+</body>
+</html>"""
+    response = make_response(body, 200)
+    response.headers["X-Farbi-Demo-Target"] = target
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
+
+
 @app.after_request
 def demo_access_response(response):
     # Logout intentionally drops cookieless access instead of immediately
     # re-authenticating the user on the redirect target.
     token = None if request.path.rstrip("/") == "/logout" else getattr(g, "farbi_access_token", None)
 
+    # Other FARBI routes may still emit redirects. If Trapdoor follows them
+    # internally, the target still carries the signed token and remains auth'd.
     location = response.headers.get("Location")
     if token and location:
         response.headers["Location"] = add_access_to_url(location, token)
@@ -143,7 +176,8 @@ def demo_register():
     form = RegistrationForm()
     if request.method == "GET" and current_user.is_authenticated:
         token = getattr(g, "farbi_access_token", None) or make_access_token(current_user)
-        return redirect(add_access_to_url("/", token), code=302)
+        g.farbi_access_token = token
+        return client_navigate("/", token, "Opening your FARBI account…")
 
     if request.method == "POST":
         username = (request.form.get("username") or "").strip().lower()
@@ -182,7 +216,7 @@ def demo_register():
             session["auth_version"] = int(user.auth_version or 1)
             token = make_access_token(user)
             g.farbi_access_token = token
-            return redirect(add_access_to_url("/", token), code=302)
+            return client_navigate("/", token, "Account created. Opening FARBI…")
 
     return render_template("register.html", form=form)
 
@@ -191,7 +225,8 @@ def demo_login():
     form = LoginForm()
     if request.method == "GET" and current_user.is_authenticated:
         token = getattr(g, "farbi_access_token", None) or make_access_token(current_user)
-        return redirect(add_access_to_url("/", token), code=302)
+        g.farbi_access_token = token
+        return client_navigate("/", token)
 
     if request.method == "POST":
         identifier = (request.form.get("identifier") or "").strip()
@@ -214,9 +249,8 @@ def demo_login():
         )
 
         if user and password_ok and not archived:
-            # Keep normal Flask-Login behavior for browsers that support cookies,
-            # but also redirect with a signed access token. The token is enough
-            # on its own, so cookie-blocking sandboxes remain authenticated.
+            # Keep normal Flask-Login for conventional browsers, but the signed
+            # URL access path below is sufficient on its own.
             session.clear()
             login_user(user, remember=bool(request.form.get("remember")), force=True)
             session["auth_version"] = int(user.auth_version or 1)
@@ -225,7 +259,7 @@ def demo_login():
             )
             token = make_access_token(user)
             g.farbi_access_token = token
-            return redirect(add_access_to_url("/", token), code=302)
+            return client_navigate("/", token)
         flash("Invalid credentials.", "danger")
 
     return render_template("login.html", form=form)
@@ -259,7 +293,7 @@ def demo_access_start(role):
         return "FARBI demo account unavailable", 503
     token = make_access_token(user)
     g.farbi_access_token = token
-    return redirect(add_access_to_url("/", token), code=302)
+    return client_navigate("/", token, f"Opening FARBI as {role.lower()}…")
 
 
 class TrapdoorPublicHost:

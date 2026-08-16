@@ -1,4 +1,4 @@
-name: Temporary YouTube caption JSON fetch
+name: Temporary Kokoro ONNX runtime bundle
 
 on:
   push:
@@ -10,58 +10,34 @@ permissions:
   contents: read
 
 jobs:
-  fetch:
+  bundle:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Start Cloudflare WARP proxy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Download Kokoro runtime and model
         shell: bash
         run: |
           set -euxo pipefail
-          docker network create warp-net || true
-          docker run -d --name warp --network warp-net -p 1080:1080 --cap-add NET_ADMIN --sysctl net.ipv6.conf.all.disable_ipv6=0 --sysctl net.ipv4.conf.all.src_valid_mark=1 caomingjun/warp
-          for i in {1..20}; do
-            RESULT=$(curl -s --max-time 4 --socks5-hostname 127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace || true)
-            echo "$RESULT"
-            echo "$RESULT" | grep -qE 'warp=(on|plus)' && exit 0
-            sleep 2
-          done
-          exit 1
+          mkdir -p kokoro_bundle/wheels
+          python -m pip install -U pip
+          python -m pip download --dest kokoro_bundle/wheels --only-binary=:all: \
+            'kokoro-onnx==0.5.0' 'soundfile'
+          curl -fL --retry 3 \
+            -o kokoro_bundle/kokoro-v1.0.onnx \
+            'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx'
+          curl -fL --retry 3 \
+            -o kokoro_bundle/voices-v1.0.bin \
+            'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin'
+          ls -lh kokoro_bundle kokoro_bundle/wheels
 
-      - name: Fetch timedtext JSON with browser impersonation
-        shell: bash
-        env:
-          CAPTION_URL: "https://www.youtube.com/api/timedtext?v=3NEgiENoDfU&ei=en1_aqKzI7PZsfIPjorKoQc&caps=asr&opi=112496729&exp=xpo%2Cxwmhp&xoaf=5&xowf=1&xospf=1&hl=en&ip=0.0.0.0&ipbits=0&expire=1786765290&sparams=ip%2Cipbits%2Cexpire%2Cv%2Cei%2Ccaps%2Copi%2Cexp%2Cxoaf&signature=9273488241782EEA9F5D370C006A76B420C2FA04.F0E0C41DEF0E4C70448ACF96CFF4F4C43BC51B5B&key=yt8&kind=asr&lang=ar&fmt=json3"
-        run: |
-          set -euxo pipefail
-          python3 -m pip install --user -U curl_cffi
-          python3 - <<'PY'
-          import os, sys
-          from curl_cffi import requests
-          url=os.environ['CAPTION_URL']
-          attempts=[
-            ('chrome', {'https':'socks5h://127.0.0.1:1080'}),
-            ('safari', {'https':'socks5h://127.0.0.1:1080'}),
-            ('chrome', None),
-          ]
-          for imp, proxies in attempts:
-            try:
-              r=requests.get(url, impersonate=imp, proxies=proxies, timeout=30)
-              print('attempt', imp, bool(proxies), r.status_code, len(r.content), r.headers.get('content-type'))
-              if r.status_code == 200 and len(r.content) > 100:
-                open('3NEgiENoDfU.ar-orig.json3','wb').write(r.content)
-                sys.exit(0)
-            except Exception as e:
-              print('error', imp, bool(proxies), repr(e))
-          sys.exit(1)
-          PY
-          python3 -m json.tool 3NEgiENoDfU.ar-orig.json3 >/dev/null
-          ls -lh 3NEgiENoDfU.ar-orig.json3
-
-      - name: Upload caption artifact
+      - name: Upload Kokoro bundle
         uses: actions/upload-artifact@v4
         with:
-          name: 3NEgiENoDfU-caption-json
-          path: 3NEgiENoDfU.ar-orig.json3
+          name: kokoro-onnx-py313-bundle
+          path: kokoro_bundle
           if-no-files-found: error
           retention-days: 1

@@ -1,0 +1,105 @@
+name: Temporary Habibi Arabic TTS test
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/temp-habibi-arabic-tts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_XET: '1'
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Habibi TTS CPU runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python -m pip install -U pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu \
+            'torch==2.6.0+cpu' 'torchaudio==2.6.0+cpu' 'torchvision==0.21.0+cpu'
+          python -m pip install 'habibi-tts==0.1.1'
+
+      - name: Generate MSA coffee ad with 32-step solver
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          TEXT='ابدأ صباحك بقهوة تستحق اللحظة. إمبر روست، حبوب مختارة ومحمصة بعناية، برائحة غنية ونفحات شوكولاتة ناعمة ومذاق متوازن. كل رشفة تمنحك دفئاً وتركيزاً هادئاً. إمبر روست، بداية أجمل ليومك.'
+          REF='كان اللعيب حاضرًا في العديد من الأنشطة والفعاليات المرتبطة بكأس العالم، مما سمح للجماهير بالتفاعل معه والتقاط الصور التذكارية.'
+          printf '%s\n' "$TEXT" > out/copy_ar.txt
+          habibi-tts_infer-cli \
+            --model Specialized \
+            --dialect MSA \
+            --ref_audio assets/MSA.mp3 \
+            --ref_text "$REF" \
+            --gen_text "$TEXT" \
+            --nfe_step 32 \
+            --cfg_strength 2.0 \
+            --speed 1.0 \
+            --device cpu \
+            --output_dir out \
+            --output_file habibi_msa_raw.wav
+          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/habibi_msa_raw.wav
+
+      - name: Fit to exactly 15 seconds and QC
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 out/habibi_msa_raw.wav)
+          python - "$DUR" <<'PY' > /tmp/filter.txt
+          import sys
+          d=float(sys.argv[1])
+          if d > 15.0:
+              ratio=d/15.0
+              # chain atempo if needed, though expected ratio is close to 1
+              filters=[]
+              while ratio > 2.0:
+                  filters.append('atempo=2.0'); ratio/=2.0
+              filters.append(f'atempo={ratio:.9f}')
+              print(','.join(filters))
+          else:
+              print('apad')
+          PY
+          FILTER=$(cat /tmp/filter.txt)
+          ffmpeg -y -v error -i out/habibi_msa_raw.wav -af "$FILTER" -t 15.000 -ar 24000 -ac 1 -c:a pcm_s16le out/habibi_msa_coffee_ad_15s.wav
+          python - <<'PY'
+          import numpy as np, soundfile as sf
+          from scipy.signal import welch
+          p='out/habibi_msa_coffee_ad_15s.wav'
+          x,sr=sf.read(p, dtype='float32')
+          peak=float(np.max(np.abs(x))) if len(x) else 0.0
+          f,P=welch(x, sr, nperseg=min(8192,len(x)))
+          mask=(f>=80)&(f<=12000)
+          hi=(f>=6000)&(f<=12000)
+          total=float(P[mask].sum())
+          ratio=float(P[hi].sum()/total) if total else 0.0
+          print('duration',len(x)/sr,'peak',peak,'hf_6_12k_ratio',ratio)
+          if abs(len(x)/sr-15.0) > 1/sr: raise SystemExit('duration mismatch')
+          if peak >= 0.999: raise SystemExit('clipping detected')
+          if ratio > 0.20: raise SystemExit('excess high-frequency energy')
+          PY
+          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/habibi_msa_coffee_ad_15s.wav
+
+      - name: Upload Habibi sample
+        uses: actions/upload-artifact@v4
+        with:
+          name: habibi-msa-coffee-ad
+          path: |
+            out/habibi_msa_coffee_ad_15s.wav
+            out/habibi_msa_raw.wav
+            out/copy_ar.txt
+          if-no-files-found: error
+          retention-days: 1

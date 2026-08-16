@@ -1,0 +1,44 @@
+name: FARBI source inspect
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-source-inspect.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out runtime bundle
+        uses: actions/checkout@v4
+
+      - name: Restore exact FARBI project
+        shell: bash
+        run: |
+          set -euo pipefail
+          OIDC_JSON=$(curl -fsS \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=farbi-sites-bootstrap")
+          OIDC_TOKEN=$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$OIDC_JSON")
+          FARBI_BUNDLE_KEY=$(curl -fsS \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            https://farbi-marketplace.omar-gassab.chatgpt.site/.well-known/farbi-bundle-key)
+          export FARBI_BUNDLE_KEY
+          cat .github/farbi-bundle/*.enc | openssl enc -d -aes-256-cbc -pbkdf2 \
+            -pass env:FARBI_BUNDLE_KEY -out farbi-project.zip
+          unzip -tq farbi-project.zip >/dev/null
+
+      - name: Upload exact source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: farbi-source-inspect
+          path: farbi-project.zip
+          if-no-files-found: error
+          retention-days: 1

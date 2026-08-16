@@ -79,12 +79,12 @@ jobs:
           test -f farbi-project/application.py
           test -f farbi-project/migrations/versions/000000000001_baseline_schema.py
 
-      - name: Adapt auth host guard for offline tunnel hosting
+      - name: Adapt auth routes for stable tunnel hosting
         working-directory: farbi-project
         shell: bash
         run: |
           set -euo pipefail
-          python -c 'from pathlib import Path; p=Path("application.py"); s=p.read_text(encoding="utf-8"); old="def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"; new="def require_platform_host_for_auth():\n    if current_app.config.get(\"OFFLINE_LOCAL_MODE\"):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"; assert old in s, "Expected auth host guard not found"; p.write_text(s.replace(old,new,1),encoding="utf-8")'
+          python -c 'from pathlib import Path; p=Path("application.py"); s=p.read_text(encoding="utf-8"); old="def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"; new="def require_platform_host_for_auth():\n    if current_app.config.get(\"OFFLINE_LOCAL_MODE\"):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"; assert old in s, "Expected auth host guard not found"; s=s.replace(old,new,1); q=chr(39); register=f"@app.route({q}/register{q}, methods=[{q}GET{q}, {q}POST{q}])"; login=f"@app.route({q}/login{q}, methods=[{q}GET{q}, {q}POST{q}])"; assert register in s and login in s, "Expected auth route decorators not found"; s=s.replace(register,register.replace("/register","/signup"),1).replace(login,login.replace("/login","/signin"),1); p.write_text(s,encoding="utf-8")'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -158,8 +158,8 @@ jobs:
               echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
               for j in {1..40}; do
                 curl -fsS "$URL/" >/dev/null && \
-                curl -fsS "$URL/login" >/dev/null && \
-                curl -fsS "$URL/register" >/dev/null && exit 0
+                curl -fsS "$URL/signin" >/dev/null && \
+                curl -fsS "$URL/signup" >/dev/null && exit 0
                 sleep 1
               done
               cat "$RUNNER_TEMP/farbi-gunicorn.log"
@@ -259,8 +259,8 @@ jobs:
           echo "FARBI is live at $FARBI_TUNNEL_URL"
           for i in {1..66}; do
             curl -fsS "$FARBI_TUNNEL_URL/" >/dev/null
-            curl -fsS "$FARBI_TUNNEL_URL/login" >/dev/null
-            curl -fsS "$FARBI_TUNNEL_URL/register" >/dev/null
+            curl -fsS "$FARBI_TUNNEL_URL/signin" >/dev/null
+            curl -fsS "$FARBI_TUNNEL_URL/signup" >/dev/null
             echo "heartbeat $i — $FARBI_TUNNEL_URL"
             sleep 300
           done

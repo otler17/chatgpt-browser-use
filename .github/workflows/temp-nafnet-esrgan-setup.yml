@@ -17,7 +17,7 @@ jobs:
           git clone --depth 1 https://github.com/megvii-research/NAFNet.git nafnet_bundle
           python3 -m pip install --upgrade pip gdown
           mkdir -p nafnet_bundle/experiments/pretrained_models
-          gdown --fuzzy 'https://drive.google.com/file/d/1S0PVRbyTakYY9a82kujgZLbMihfNBLfC/view?usp=sharing' -O nafnet_bundle/experiments/pretrained_models/NAFNet-GoPro-width64.pth
+          gdown '1S0PVRbyTakYY9a82kujgZLbMihfNBLfC' -O nafnet_bundle/experiments/pretrained_models/NAFNet-GoPro-width64.pth
 
           git clone --depth 1 https://github.com/xinntao/Real-ESRGAN.git realesrgan_bundle
           mkdir -p realesrgan_bundle/weights

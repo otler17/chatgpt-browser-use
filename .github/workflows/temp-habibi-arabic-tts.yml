@@ -32,6 +32,23 @@ jobs:
             'torch==2.6.0+cpu' 'torchaudio==2.6.0+cpu' 'torchvision==0.21.0+cpu'
           python -m pip install 'habibi-tts==0.1.1'
 
+      - name: Patch float waveform export headroom
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python - <<'PY'
+          import pathlib, habibi_tts
+          root = pathlib.Path(habibi_tts.__file__).resolve().parent
+          p = root / 'infer' / 'infer_cli.py'
+          s = p.read_text()
+          old = 'final_wave = np.concatenate(generated_audio_segments)'
+          new = '''final_wave = np.concatenate(generated_audio_segments)\n        peak = float(np.max(np.abs(final_wave))) if final_wave.size else 0.0\n        print(f"pre_export_float_peak={peak:.9f}")\n        if peak > 0.94:\n            final_wave = final_wave * (0.94 / peak)\n            print(f"scaled_float_peak={float(np.max(np.abs(final_wave))):.9f}")'''
+          if old not in s:
+              raise SystemExit('export hook not found')
+          p.write_text(s.replace(old, new, 1))
+          print(p)
+          PY
+
       - name: Generate MSA coffee ad with 32-step solver
         shell: bash
         run: |
@@ -81,14 +98,15 @@ jobs:
           p='out/habibi_msa_coffee_ad_15s.wav'
           x,sr=sf.read(p, dtype='float32')
           peak=float(np.max(np.abs(x))) if len(x) else 0.0
+          sat=int(np.sum(np.abs(x)>=0.9999))
           f,P=welch(x, sr, nperseg=min(8192,len(x)))
           mask=(f>=80)&(f<=12000)
           hi=(f>=6000)&(f<=12000)
           total=float(P[mask].sum())
           ratio=float(P[hi].sum()/total) if total else 0.0
-          print('duration',len(x)/sr,'peak',peak,'hf_6_12k_ratio',ratio)
+          print('duration',len(x)/sr,'peak',peak,'saturated_samples',sat,'hf_6_12k_ratio',ratio)
           if abs(len(x)/sr-15.0) > 1/sr: raise SystemExit('duration mismatch')
-          if peak >= 0.985: raise SystemExit('clipping/headroom failure')
+          if peak >= 0.985 or sat: raise SystemExit('clipping/headroom failure')
           if ratio > 0.20: raise SystemExit('excess high-frequency energy')
           PY
           ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/habibi_msa_coffee_ad_15s.wav
@@ -97,7 +115,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: habibi-msa-coffee-ad
+          name: habibi-msa-coffee-ad-unclipped
           path: |
             out/habibi_msa_coffee_ad_15s.wav
             out/habibi_msa_raw.wav
@@ -105,4 +123,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-# trigger 2
+# trigger 3

@@ -8,6 +8,10 @@ on:
       - ".github/farbi-bundle/**"
   workflow_dispatch:
 
+concurrency:
+  group: farbi-fixed-live-host
+  cancel-in-progress: true
+
 permissions:
   contents: write
   id-token: write
@@ -15,7 +19,7 @@ permissions:
 jobs:
   farbi:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 350
     services:
       postgres:
         image: postgres:16
@@ -80,26 +84,36 @@ jobs:
           test -f farbi-project/application.py
           test -f farbi-project/scripts/seed_integration_data.py
 
-      - name: Adapt auth routes for fixed demo host
+      - name: Adapt auth routes and CSRF markup for fixed host
         working-directory: farbi-project
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          p = Path("application.py")
-          s = p.read_text(encoding="utf-8")
-          old = "def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
-          new = "def require_platform_host_for_auth():\n    if current_app.config.get('OFFLINE_LOCAL_MODE'):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
-          if old in s:
-              s = s.replace(old, new, 1)
+
+          app_path = Path("application.py")
+          source = app_path.read_text(encoding="utf-8")
+
+          guard = "def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
+          offline_guard = "def require_platform_host_for_auth():\n    if current_app.config.get('OFFLINE_LOCAL_MODE'):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
+          if guard in source:
+              source = source.replace(guard, offline_guard, 1)
+
           register = "@app.route('/register', methods=['GET', 'POST'])"
           login = "@app.route('/login', methods=['GET', 'POST'])"
-          if register not in s or login not in s:
+          if register not in source or login not in source:
               raise SystemExit("Expected auth route decorators not found")
-          s = s.replace(register, "@app.route('/signup', methods=['GET', 'POST'])", 1)
-          s = s.replace(login, "@app.route('/signin', methods=['GET', 'POST'])", 1)
-          p.write_text(s, encoding="utf-8")
+          source = source.replace(register, "@app.route('/signup', methods=['GET', 'POST'])", 1)
+          source = source.replace(login, "@app.route('/signin', methods=['GET', 'POST'])", 1)
+          app_path.write_text(source, encoding="utf-8")
+
+          duplicate_csrf = '        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">\n'
+          for template_name in ("templates/register.html", "templates/login.html"):
+              path = Path(template_name)
+              html = path.read_text(encoding="utf-8")
+              html = html.replace(duplicate_csrf, "", 1)
+              path.write_text(html, encoding="utf-8")
           PY
 
       - name: Set up Python
@@ -180,7 +194,7 @@ jobs:
           cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
           exit 1
 
-      - name: Verify signup, PostgreSQL, session and fresh signin
+      - name: Verify browser signup, PostgreSQL and fresh signin
         id: auth_e2e
         working-directory: farbi-project
         shell: bash
@@ -188,7 +202,6 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           import os
-          import sys
           import requests
           from bs4 import BeautifulSoup
           from application import app, User
@@ -199,55 +212,56 @@ jobs:
           email = f"farbi.demo.{run_id}@gmail.com"
           password = f"FarbiDemo-{run_id}!"
 
-          def hidden_fields(html):
+          def get_auth_form(html, route):
               soup = BeautifulSoup(html, "html.parser")
-              form = soup.find("form")
-              if form is None:
-                  raise AssertionError("No form found")
-              fields = []
-              for node in form.find_all("input"):
-                  if node.get("type", "text").lower() == "hidden" and node.get("name"):
-                      fields.append((node["name"], node.get("value", "")))
-              return fields
+              for form in soup.find_all("form"):
+                  action = (form.get("action") or "").rstrip("/")
+                  if action == route or action.endswith(route):
+                      return form
+              raise AssertionError(f"Auth form for {route} not found")
 
-          def print_form_errors(html, label):
-              soup = BeautifulSoup(html, "html.parser")
-              messages = []
-              form = soup.find("form")
-              if form:
-                  for node in form.select("span.text-red-500"):
-                      text = node.get_text(" ", strip=True)
-                      if text:
-                          messages.append(text)
-              for selector in (".alert", "[role=alert]", ".flash-message"):
-                  for node in soup.select(selector):
-                      text = node.get_text(" ", strip=True)
-                      if text and text not in messages:
-                          messages.append(text)
-              print(f"{label} messages: {messages}")
+          def form_payload(form):
+              payload = {}
+              for field in form.find_all(["input", "select", "textarea"]):
+                  name = field.get("name")
+                  if not name:
+                      continue
+                  if field.name == "input":
+                      field_type = (field.get("type") or "text").lower()
+                      if field_type in {"checkbox", "radio"} and not field.has_attr("checked"):
+                          continue
+                      payload[name] = field.get("value", "")
+                  elif field.name == "textarea":
+                      payload[name] = field.get_text()
+                  elif field.name == "select":
+                      selected = field.find("option", selected=True) or field.find("option")
+                      payload[name] = selected.get("value", "") if selected else ""
+              return payload
 
           signup = requests.Session()
-          r = signup.get(origin + "/signup", timeout=30)
-          r.raise_for_status()
-          payload = hidden_fields(r.text)
-          payload.extend([
-              ("username", username),
-              ("email", email),
-              ("password", password),
-              ("confirm_password", password),
-              ("submit", "Register"),
-          ])
-          r = signup.post(
+          response = signup.get(origin + "/signup", timeout=30)
+          response.raise_for_status()
+          form = get_auth_form(response.text, "/signup")
+          payload = form_payload(form)
+          payload.update({
+              "username": username,
+              "email": email,
+              "password": password,
+              "confirm_password": password,
+          })
+          response = signup.post(
               origin + "/signup",
               data=payload,
               headers={"Referer": origin + "/signup"},
               allow_redirects=False,
               timeout=30,
           )
-          print("signup status:", r.status_code, "location:", r.headers.get("Location"))
-          if r.status_code not in (302, 303):
-              print_form_errors(r.text, "signup")
-              sys.exit(1)
+          print("signup status:", response.status_code, "location:", response.headers.get("Location"))
+          if response.status_code not in (302, 303):
+              soup = BeautifulSoup(response.text, "html.parser")
+              errors = [node.get_text(" ", strip=True) for node in soup.select("form span.text-red-500")]
+              print("signup validation messages:", errors)
+              raise AssertionError("signup form did not redirect")
 
           with app.app_context():
               user = User.query.filter_by(email=email).one_or_none()
@@ -255,34 +269,29 @@ jobs:
               assert user.check_password(password), "password hash verification failed"
               print({"postgres_user_id": user.id, "email": user.email})
 
-          r = signup.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
-          print("protected profile after signup:", r.status_code)
-          assert r.status_code == 200, "signup session did not authenticate protected route"
+          response = signup.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
+          print("protected profile after signup:", response.status_code)
+          assert response.status_code == 200, "signup session did not authenticate protected route"
 
           signin = requests.Session()
-          r = signin.get(origin + "/signin", timeout=30)
-          r.raise_for_status()
-          payload = hidden_fields(r.text)
-          payload.extend([
-              ("identifier", email),
-              ("password", password),
-              ("submit", "Login"),
-          ])
-          r = signin.post(
+          response = signin.get(origin + "/signin", timeout=30)
+          response.raise_for_status()
+          form = get_auth_form(response.text, "/signin")
+          payload = form_payload(form)
+          payload.update({"identifier": email, "password": password})
+          response = signin.post(
               origin + "/signin",
               data=payload,
               headers={"Referer": origin + "/signin"},
               allow_redirects=False,
               timeout=30,
           )
-          print("fresh signin status:", r.status_code, "location:", r.headers.get("Location"))
-          if r.status_code not in (302, 303):
-              print_form_errors(r.text, "signin")
-              sys.exit(1)
+          print("fresh signin status:", response.status_code, "location:", response.headers.get("Location"))
+          assert response.status_code in (302, 303), "fresh signin did not redirect"
 
-          r = signin.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
-          print("protected profile after fresh signin:", r.status_code)
-          assert r.status_code == 200, "fresh signin did not authenticate protected route"
+          response = signin.get(origin + "/profile/edit", allow_redirects=False, timeout=30)
+          print("protected profile after fresh signin:", response.status_code)
+          assert response.status_code == 200, "fresh signin did not authenticate protected route"
           print("FARBI AUTH E2E PASSED")
           PY
 
@@ -292,8 +301,10 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os
+          import json
+          import os
           from datetime import datetime, timezone
+
           payload = {
               "origin": os.environ["FARBI_FIXED_URL"],
               "run_id": os.environ["GITHUB_RUN_ID"],
@@ -301,9 +312,9 @@ jobs:
               "auth_routes": {"signin": "/signin", "signup": "/signup"},
               "postgres_auth_e2e": "passed"
           }
-          with open("farbi-live-origin.json", "w", encoding="utf-8") as f:
-              json.dump(payload, f, indent=2)
-              f.write("\n")
+          with open("farbi-live-origin.json", "w", encoding="utf-8") as handle:
+              json.dump(payload, handle, indent=2)
+              handle.write("\n")
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

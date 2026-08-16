@@ -139,7 +139,9 @@ jobs:
               TUNNEL_HOST="${URL#https://}"
               kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
               sleep 2
-              FLASK_SERVER_NAME="$TUNNEL_HOST" RUNNER_TRACKING_ID="" nohup gunicorn \
+              FLASK_SERVER_NAME="$TUNNEL_HOST" \
+              MAIN_APP_DOMAINS="farbi-marketplace.omar-gassab.chatgpt.site,127.0.0.1,localhost,$TUNNEL_HOST" \
+              RUNNER_TRACKING_ID="" nohup gunicorn \
                 --chdir farbi-project \
                 --bind 127.0.0.1:8000 \
                 --workers 2 \
@@ -148,7 +150,9 @@ jobs:
                 application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
               echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
               for j in {1..40}; do
-                curl -fsS "$URL/" >/dev/null && exit 0
+                curl -fsS "$URL/" >/dev/null && \
+                curl -fsS "$URL/login" >/dev/null && \
+                curl -fsS "$URL/register" >/dev/null && exit 0
                 sleep 1
               done
               cat "$RUNNER_TEMP/farbi-gunicorn.log"
@@ -248,6 +252,8 @@ jobs:
           echo "FARBI is live at $FARBI_TUNNEL_URL"
           for i in {1..66}; do
             curl -fsS "$FARBI_TUNNEL_URL/" >/dev/null
+            curl -fsS "$FARBI_TUNNEL_URL/login" >/dev/null
+            curl -fsS "$FARBI_TUNNEL_URL/register" >/dev/null
             echo "heartbeat $i — $FARBI_TUNNEL_URL"
             sleep 300
           done

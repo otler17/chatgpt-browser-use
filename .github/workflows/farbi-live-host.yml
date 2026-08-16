@@ -85,6 +85,29 @@ jobs:
           mkdir farbi-project
           unzip -q farbi-project.zip -d farbi-project
           test -f farbi-project/application.py
+
+          # Demo runtime repair: the legacy order-history fallback converted the
+          # delivery setting to float and then added it to PostgreSQL Decimal
+          # financial columns. Keep all three operands Decimal-compatible.
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("farbi-project/application.py")
+          text = path.read_text(encoding="utf-8")
+          import_marker = "from datetime import datetime, timezone, timedelta"
+          if "from decimal import Decimal" not in text:
+              if import_marker not in text:
+                  raise SystemExit("datetime import marker missing")
+              text = text.replace(import_marker, "from decimal import Decimal\n" + import_marker, 1)
+          old = "            batch_delivery = delivery_price\n            batch_final_total = batch_subtotal_after_discount_excl_vat + batch_vat + batch_delivery"
+          new = "            batch_delivery = Decimal(str(delivery_price))\n            batch_final_total = batch_subtotal_after_discount_excl_vat + batch_vat + batch_delivery"
+          if old not in text and new not in text:
+              raise SystemExit("order-history financial marker missing")
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+          print("Patched order_history delivery arithmetic to Decimal")
+          PY
+
           cp .github/farbi-demo/seed_demo.py farbi-project/seed_demo.py
           cp .github/farbi-demo/trapdoor_entry.py farbi-project/trapdoor_entry.py
           cp .github/farbi-demo/verify_demo.py farbi-project/verify_demo.py

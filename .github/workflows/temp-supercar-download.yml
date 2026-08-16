@@ -1,4 +1,4 @@
-name: Temporary Kokoro ONNX runtime bundle
+name: Temporary F5-TTS local runtime bundle
 
 on:
   push:
@@ -12,32 +12,49 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
-      - name: Download Kokoro runtime and model
+      - name: Build portable F5-TTS bundle
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p kokoro_bundle/wheels
-          python -m pip install -U pip
-          python -m pip download --dest kokoro_bundle/wheels --only-binary=:all: \
-            'kokoro-onnx==0.5.0' 'soundfile'
-          curl -fL --retry 3 \
-            -o kokoro_bundle/kokoro-v1.0.onnx \
-            'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx'
-          curl -fL --retry 3 \
-            -o kokoro_bundle/voices-v1.0.bin \
-            'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin'
-          ls -lh kokoro_bundle kokoro_bundle/wheels
+          mkdir -p f5_bundle/wheels f5_bundle/models/f5 f5_bundle/models/vocos
+          git clone --depth 1 https://github.com/SWivid/F5-TTS.git f5_bundle/F5-TTS
+          python -m pip install -U pip huggingface_hub
+          python - <<'PY'
+          from huggingface_hub import hf_hub_download, snapshot_download
+          hf_hub_download(
+              repo_id='SWivid/F5-TTS',
+              filename='F5TTS_v1_Base/model_1250000.safetensors',
+              local_dir='f5_bundle/models/f5',
+          )
+          hf_hub_download(
+              repo_id='SWivid/F5-TTS',
+              filename='F5TTS_v1_Base/vocab.txt',
+              local_dir='f5_bundle/models/f5',
+          )
+          snapshot_download(
+              repo_id='charactr/vocos-mel-24khz',
+              local_dir='f5_bundle/models/vocos',
+              allow_patterns=['config.yaml', 'pytorch_model.bin'],
+          )
+          PY
+          python -m pip download --dest f5_bundle/wheels --only-binary=:all: --no-deps \
+            'transformers' 'tokenizers' 'vocos' 'x-transformers>=1.31.14' \
+            'torchdiffeq' 'pypinyin' 'rjieba' 'ema-pytorch>=0.5.2' \
+            'einx' 'rotary-embedding-torch' 'beartype' 'vector-quantize-pytorch' \
+            'local-attention' 'gateloop-transformer'
+          du -sh f5_bundle
+          find f5_bundle -maxdepth 3 -type f -printf '%p %k KB\n' | sort | tail -40
 
-      - name: Upload Kokoro bundle
+      - name: Upload F5-TTS bundle
         uses: actions/upload-artifact@v4
         with:
-          name: kokoro-onnx-py313-bundle
-          path: kokoro_bundle
+          name: f5-tts-v1-local-bundle
+          path: f5_bundle
           if-no-files-found: error
           retention-days: 1

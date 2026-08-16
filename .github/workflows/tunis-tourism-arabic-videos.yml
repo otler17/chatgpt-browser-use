@@ -1,11 +1,11 @@
-name: Build three Arabic Tunis tourism videos
+name: Build one polished Arabic Tunis tourism short
 
 on:
   push:
     branches: [tunis-tourism-videos]
     paths:
       - '.github/workflows/tunis-tourism-arabic-videos.yml'
-      - 'scripts/build_tunis_tourism_videos_v2.py'
+      - 'scripts/build_tunis_viral_short.py'
   workflow_dispatch:
 
 permissions:
@@ -32,31 +32,36 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
           python -m pip install --upgrade pip
-          python -m pip install edge-tts gTTS requests
+          python -m pip install edge-tts requests
 
-      - name: Render videos
+      - name: Render polished short
         shell: bash
         run: |
           set -euxo pipefail
-          python scripts/build_tunis_tourism_videos_v2.py
+          python scripts/build_tunis_viral_short.py
 
-      - name: Validate outputs
+      - name: Validate output
         shell: bash
         run: |
           set -euxo pipefail
-          ls -lh outputs
-          for f in outputs/*.mp4; do
-            ffprobe -v error -show_entries format=filename,duration,size -of json "$f"
-          done
-          test "$(find outputs -maxdepth 1 -name '*.mp4' | wc -l)" -eq 3
+          ls -lh outputs_viral
+          test "$(find outputs_viral -maxdepth 1 -name '*.mp4' | wc -l)" -eq 1
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate -show_entries format=duration,size -of json outputs_viral/tunis-one-day-ar-viral-28s.mp4
+          python - <<'PY'
+          import json, subprocess
+          p = subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','json','outputs_viral/tunis-one-day-ar-viral-28s.mp4'], capture_output=True, text=True, check=True)
+          d = float(json.loads(p.stdout)['format']['duration'])
+          assert 27.5 <= d <= 28.2, d
+          PY
 
-      - name: Upload rendered videos
+      - name: Upload final video
         uses: actions/upload-artifact@v4
         with:
-          name: tunis-tourism-arabic-30s
+          name: tunis-one-day-ar-viral-28s
           path: |
-            outputs/*.mp4
-            outputs/credits.json
-            outputs/scripts.json
+            outputs_viral/tunis-one-day-ar-viral-28s.mp4
+            outputs_viral/summary.json
+            outputs_viral/script.txt
+            outputs_viral/credits.json
           if-no-files-found: error
           retention-days: 3

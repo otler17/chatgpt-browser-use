@@ -37,16 +37,21 @@ jobs:
         run: |
           set -euxo pipefail
           python - <<'PY'
-          import pathlib, habibi_tts
-          root = pathlib.Path(habibi_tts.__file__).resolve().parent
-          p = root / 'infer' / 'infer_cli.py'
+          import pathlib, sysconfig
+          p = pathlib.Path(sysconfig.get_paths()['purelib']) / 'habibi_tts' / 'infer' / 'infer_cli.py'
+          print('patch_target', p)
+          if not p.is_file():
+              raise SystemExit(f'CLI source not found: {p}')
           s = p.read_text()
           old = 'final_wave = np.concatenate(generated_audio_segments)'
           new = '''final_wave = np.concatenate(generated_audio_segments)\n        peak = float(np.max(np.abs(final_wave))) if final_wave.size else 0.0\n        print(f"pre_export_float_peak={peak:.9f}")\n        if peak > 0.94:\n            final_wave = final_wave * (0.94 / peak)\n            print(f"scaled_float_peak={float(np.max(np.abs(final_wave))):.9f}")'''
           if old not in s:
               raise SystemExit('export hook not found')
           p.write_text(s.replace(old, new, 1))
-          print(p)
+          check = p.read_text()
+          if 'pre_export_float_peak=' not in check:
+              raise SystemExit('patch verification failed')
+          print('patch_ok')
           PY
 
       - name: Generate MSA coffee ad with 32-step solver
@@ -123,4 +128,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 1
 
-# trigger 3
+# trigger 4

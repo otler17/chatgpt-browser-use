@@ -112,7 +112,7 @@ jobs:
             application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
           for i in {1..80}; do
-            curl -fsS http://127.0.0.1:8000/ >/dev/null && exit 0
+            curl -fsS -H "Host: 127.0.0.1:5000" http://127.0.0.1:8000/ >/dev/null && exit 0
             sleep 1
           done
           cat "$RUNNER_TEMP/farbi-gunicorn.log"
@@ -136,8 +136,23 @@ jobs:
             if [ -n "$URL" ]; then
               printf '%s\n' "$URL" | tee "$RUNNER_TEMP/farbi-live-url.txt"
               echo "FARBI_TUNNEL_URL=$URL" >> "$GITHUB_ENV"
-              curl -fsS "$URL/" >/dev/null
-              exit 0
+              TUNNEL_HOST="${URL#https://}"
+              kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
+              sleep 2
+              FLASK_SERVER_NAME="$TUNNEL_HOST" RUNNER_TRACKING_ID="" nohup gunicorn \
+                --chdir farbi-project \
+                --bind 127.0.0.1:8000 \
+                --workers 2 \
+                --threads 4 \
+                --timeout 120 \
+                application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
+              echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
+              for j in {1..40}; do
+                curl -fsS "$URL/" >/dev/null && exit 0
+                sleep 1
+              done
+              cat "$RUNNER_TEMP/farbi-gunicorn.log"
+              exit 1
             fi
             sleep 1
           done

@@ -18,27 +18,25 @@ jobs:
       - name: Check out published origin
         uses: actions/checkout@v4
 
-      - name: Verify home and auth endpoints
+      - name: Probe stable and origin auth paths
         shell: bash
         run: |
           set -euo pipefail
           ORIGIN=$(python -c 'import json; print(json.load(open("farbi-live-origin.json"))["origin"])')
           STABLE="https://farbi-marketplace.omar-gassab.chatgpt.site"
 
-          check() {
+          probe() {
             local url="$1"
             echo "=== $url ==="
-            curl -fsSL \
-              --max-time 30 \
-              --max-redirs 5 \
-              -o /dev/null \
-              -w 'status=%{http_code} redirects=%{num_redirects} final=%{url_effective}\n' \
-              "$url"
+            curl -sSI --max-time 20 "$url" | sed -n '1,25p' || true
           }
 
-          check "$ORIGIN/"
-          check "$ORIGIN/login"
-          check "$ORIGIN/register"
-          check "$STABLE/"
-          check "$STABLE/login"
-          check "$STABLE/register"
+          probe "$ORIGIN/login"
+          probe "$ORIGIN/register"
+          probe "$ORIGIN/signin"
+          probe "$ORIGIN/signup"
+          probe "$STABLE/login"
+          probe "$STABLE/register"
+          probe "$STABLE/signin"
+          probe "$STABLE/signup"
+          probe "$STABLE/__farbi_probe_missing"

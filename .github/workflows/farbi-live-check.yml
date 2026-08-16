@@ -29,7 +29,7 @@ jobs:
             echo "=== $BASE ==="
             curl -fsS "$BASE/" -o /tmp/home.html
             grep -Eo 'href="[^"]*(login|signin|register|signup)[^"]*"' /tmp/home.html | sort -u || true
-            for PATH in /signin /signup; do
-              curl -sS -o /dev/null -w "$PATH status=%{http_code} redirects=%{num_redirects}\n" --max-redirs 0 "$BASE$PATH" || true
+            for ROUTE in /signin /signup; do
+              curl -sS -o /dev/null -w "$ROUTE status=%{http_code} redirects=%{num_redirects}\n" --max-redirs 0 "$BASE$ROUTE" || true
             done
           done

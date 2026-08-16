@@ -1,0 +1,25 @@
+name: Retire stale FARBI host
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-retire-stale-host.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Cancel superseded host run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run cancel 31952800691 --repo "$GITHUB_REPOSITORY" || true
+          echo "Requested cancellation of stale FARBI host run 31952800691."

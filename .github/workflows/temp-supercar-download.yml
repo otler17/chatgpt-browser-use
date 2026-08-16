@@ -1,4 +1,4 @@
-name: Temporary F5-TTS minimal dependency patch
+name: Temporary VibeThinker sandbox bundle
 
 on:
   push:
@@ -10,27 +10,43 @@ permissions:
   contents: read
 
 jobs:
-  deps:
+  bundle:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - name: Build missing dependency wheels
+      - name: Build portable llama.cpp CLI
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p f5_dep_patch
-          python -m pip install -U pip wheel setuptools
-          python -m pip wheel --wheel-dir f5_dep_patch --no-deps \
-            'torch-einops-utils>=0.1.12' 'encodec==0.1.1' \
-            'frozendict' 'hyper-connections>=0.1.8'
-          ls -lh f5_dep_patch
-      - name: Upload dependency patch
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential curl ca-certificates
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          cmake -S llama.cpp -B llama.cpp/build \
+            -DGGML_NATIVE=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build llama.cpp/build --target llama-cli -j2
+          mkdir -p vibethinker_bundle
+          cp llama.cpp/build/bin/llama-cli vibethinker_bundle/
+          chmod +x vibethinker_bundle/llama-cli
+          vibethinker_bundle/llama-cli --version
+
+      - name: Download VibeThinker-3B Q3_K_M GGUF
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -L --fail --retry 5 --retry-delay 3 \
+            -o vibethinker_bundle/VibeThinker-3B.Q3_K_M.gguf \
+            'https://huggingface.co/prithivMLmods/VibeThinker-3B-GGUF/resolve/main/VibeThinker-3B.Q3_K_M.gguf?download=true'
+          ls -lh vibethinker_bundle
+          sha256sum vibethinker_bundle/VibeThinker-3B.Q3_K_M.gguf | tee vibethinker_bundle/SHA256SUMS.txt
+
+      - name: Upload sandbox bundle
         uses: actions/upload-artifact@v4
         with:
-          name: f5-minimal-dep-patch
-          path: f5_dep_patch
+          name: vibethinker-3b-q3km-sandbox
+          path: vibethinker_bundle
           if-no-files-found: error
           retention-days: 1
+          compression-level: 0

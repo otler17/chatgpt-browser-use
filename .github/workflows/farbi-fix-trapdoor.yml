@@ -1,0 +1,42 @@
+name: FARBI fixed tunnel config patch
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-fix-trapdoor.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch fixed tunnel runtime and source artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/farbi-live-host.yml')
+          s = p.read_text(encoding='utf-8')
+          old = '          FLASK_SERVER_NAME="" \\\n'
+          if old not in s:
+              raise SystemExit('FLASK_SERVER_NAME empty override not found')
+          s = s.replace(old, '', 1)
+          marker = '''          test -f farbi-project/migrations/versions/000000000001_baseline_schema.py\n\n      - name: Adapt auth routes for stable tunnel hosting\n'''
+          insert = '''          test -f farbi-project/migrations/versions/000000000001_baseline_schema.py\n\n      - name: Upload restored FARBI source for validation\n        uses: actions/upload-artifact@v4\n        with:\n          name: farbi-restored-source\n          path: farbi-project.zip\n          if-no-files-found: error\n          retention-days: 1\n\n      - name: Adapt auth routes for stable tunnel hosting\n'''
+          if marker not in s:
+              raise SystemExit('restore marker not found')
+          s = s.replace(marker, insert, 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/farbi-live-host.yml
+          git commit -m "Fix FARBI fixed tunnel host binding"
+          git push origin HEAD:master

@@ -1,0 +1,67 @@
+{
+  "origin": "https://farbi-demo-otler17.trapdoor.sh",
+  "run_id": "31956027636",
+  "published_at": "2026-08-16T15:35:15.481658+00:00",
+  "database": "PostgreSQL 16",
+  "redis": "Redis 7",
+  "auth_routes": {
+    "signin": "/login",
+    "signup": "/register"
+  },
+  "demo_password": "Password123",
+  "demo_accounts": {
+    "customer": {
+      "email": "customer_seed@example.com",
+      "username": "customer_seed"
+    },
+    "designer": {
+      "email": "designer_seed@example.com",
+      "username": "designer_seed"
+    },
+    "admin": {
+      "email": "admin_seed@example.com",
+      "username": "admin_seed"
+    }
+  },
+  "dummy_data": {
+    "products": 6,
+    "reviews": 3,
+    "completed_orders": 2,
+    "categories": [
+      "Home & Living",
+      "Decor",
+      "Accessories",
+      "Toys & Games"
+    ]
+  },
+  "demo_design_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "verified_pages": [
+    "/",
+    "/browse",
+    "/designers",
+    "/cart",
+    "/login",
+    "/register",
+    "/profile/customer_seed",
+    "/profile/designer_seed",
+    "/profile/edit",
+    "/order_history",
+    "/designer/dashboard",
+    "/admin",
+    "/admin/stl_library",
+    "/admin/orders",
+    "/admin/users",
+    "/admin/settings",
+    "/design/<all six demo ids>",
+    "/uploads/images/design_previews/demo_planter_thumb.jpg"
+  ],
+  "signup_e2e": "passed",
+  "role_logins_e2e": "passed"
+}

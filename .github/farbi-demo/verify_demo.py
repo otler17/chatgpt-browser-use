@@ -2,7 +2,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -11,6 +11,7 @@ from application import User, app
 BASE = os.environ.get("FARBI_URL", "https://farbi-demo-otler17.trapdoor.sh").rstrip("/")
 PASSWORD = os.environ.get("DEMO_PASSWORD", "Password123")
 TIMEOUT = 30
+EXPECTED_SESSION_COOKIE = "farbi_demo_session_v3"
 
 
 def url(path):
@@ -33,6 +34,10 @@ def check_public(path):
 
 def login(email, label):
     session = requests.Session()
+    # Reproduce a real tester who may still have Flask's old default `session`
+    # cookie from one of the earlier ephemeral deployments on this same host.
+    host = urlparse(BASE).hostname
+    session.cookies.set("session", "stale-legacy-demo-cookie", domain=host, path="/")
     require_status(session.get(url("/login"), timeout=TIMEOUT), 200, f"{label} login form")
     response = session.post(
         url("/login"),
@@ -41,12 +46,12 @@ def login(email, label):
         allow_redirects=True,
     )
     require_status(response, 200, f"{label} login")
-    # Trapdoor may follow the upstream Flask 302 internally while retaining the
-    # original public URL. Prove authentication by the persisted session cookie
-    # and by a login-required page in the caller, not by url_effective.
-    if not session.cookies:
-        raise RuntimeError(f"{label} login returned no session cookies")
-    print(f"{label} login POST -> 200; cookies={sorted(session.cookies.keys())}")
+    cookie_names = sorted(session.cookies.keys())
+    if EXPECTED_SESSION_COOKIE not in cookie_names:
+        raise RuntimeError(
+            f"{label} login did not issue {EXPECTED_SESSION_COOKIE}; cookies={cookie_names}"
+        )
+    print(f"{label} login POST -> 200; cookies={cookie_names}")
     return session
 
 
@@ -75,8 +80,10 @@ def verify_signup():
         allow_redirects=True,
     )
     require_status(response, 200, "signup")
-    if not session.cookies:
-        raise RuntimeError("signup returned no session cookies")
+    if EXPECTED_SESSION_COOKIE not in session.cookies.keys():
+        raise RuntimeError(
+            f"signup did not issue {EXPECTED_SESSION_COOKIE}; cookies={sorted(session.cookies.keys())}"
+        )
     check_authenticated(session, "/profile/edit", "new customer")
     with app.app_context():
         created = User.query.filter_by(email=email).one_or_none()
@@ -124,6 +131,7 @@ def main():
         "database": "PostgreSQL 16",
         "redis": "Redis 7",
         "auth_routes": {"signin": "/login", "signup": "/register"},
+        "session_cookie": EXPECTED_SESSION_COOKIE,
         "demo_password": PASSWORD,
         "demo_accounts": {
             "customer": {"email": "customer_seed@example.com", "username": "customer_seed"},
@@ -157,6 +165,7 @@ def main():
             "/design/<all six demo ids>",
             "/uploads/images/design_previews/demo_planter_thumb.jpg",
         ],
+        "stale_cookie_login_e2e": "passed",
         "signup_e2e": "passed",
         "role_logins_e2e": "passed",
     }

@@ -1,0 +1,159 @@
+name: FARBI exact project live host
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-live-host.yml"
+      - ".github/farbi-bundle/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  farbi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: farbi_user
+          POSTGRES_PASSWORD: farbi_password
+          POSTGRES_DB: farbi_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U farbi_user -d farbi_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      APP_ENV: development
+      SECRET_KEY: farbi-actions-demo-secret-${{ github.run_id }}-${{ github.run_attempt }}
+      DATABASE_URL: postgresql://farbi_user:farbi_password@127.0.0.1:5432/farbi_db
+      REDIS_URL: redis://127.0.0.1:6379/0
+      PAYMENT_WEBHOOK_SECRET: farbi-actions-webhook-${{ github.run_id }}
+      OFFLINE_LOCAL_MODE: "true"
+      STORAGE_BACKEND: local
+      LOCAL_UPLOAD_ROOT: instance/local_uploads
+      EMAIL_BACKEND: local
+      LOCAL_EMAIL_OUTBOX: instance/offline_emails
+      PAYMENT_PROVIDER: mock
+      MAIN_APP_DOMAINS: farbi-marketplace.omar-gassab.chatgpt.site,127.0.0.1,localhost
+      PUBLIC_AUTH_ORIGIN: https://farbi-marketplace.omar-gassab.chatgpt.site
+
+    steps:
+      - name: Check out runtime bundle
+        uses: actions/checkout@v4
+
+      - name: Restore the exact uploaded project
+        shell: bash
+        run: |
+          set -euo pipefail
+          OIDC_JSON=$(curl -fsS \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=farbi-sites-bootstrap")
+          OIDC_TOKEN=$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$OIDC_JSON")
+          FARBI_BUNDLE_KEY=$(curl -fsS \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            https://farbi-marketplace.omar-gassab.chatgpt.site/.well-known/farbi-bundle-key)
+          export FARBI_BUNDLE_KEY
+          cat .github/farbi-bundle/*.enc | openssl enc -d -aes-256-cbc -pbkdf2 \
+            -pass env:FARBI_BUNDLE_KEY -out farbi-project.zip
+          mkdir farbi-project
+          unzip -q farbi-project.zip -d farbi-project
+          test -f farbi-project/application.py
+          test -f farbi-project/migrations/versions/000000000001_baseline_schema.py
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: farbi-project/requirements/prod.txt
+
+      - name: Install exact application dependencies
+        working-directory: farbi-project
+        run: python -m pip install -r requirements/prod.txt
+
+      - name: Apply PostgreSQL migrations and seed integration users
+        working-directory: farbi-project
+        run: |
+          python -m flask --app application db upgrade
+          python scripts/seed_integration_data.py
+
+      - name: Start the uploaded Flask application
+        working-directory: farbi-project
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUNNER_TRACKING_ID="" nohup gunicorn \
+            --bind 127.0.0.1:8000 \
+            --workers 2 \
+            --threads 4 \
+            --timeout 120 \
+            application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
+          for i in {1..80}; do
+            curl -fsS http://127.0.0.1:8000/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/farbi-gunicorn.log"
+          exit 1
+
+      - name: Open the live tunnel
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o "$RUNNER_TEMP/cloudflared"
+          chmod +x "$RUNNER_TEMP/cloudflared"
+          RUNNER_TRACKING_ID="" nohup "$RUNNER_TEMP/cloudflared" tunnel \
+            --url http://127.0.0.1:8000 \
+            --no-autoupdate > "$RUNNER_TEMP/cloudflared.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/cloudflared.pid"
+          for i in {1..90}; do
+            URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' "$RUNNER_TEMP/cloudflared.log" | head -1 || true)
+            if [ -n "$URL" ]; then
+              printf '%s\n' "$URL" | tee "$RUNNER_TEMP/farbi-live-url.txt"
+              echo "FARBI_TUNNEL_URL=$URL" >> "$GITHUB_ENV"
+              curl -fsS "$URL/" >/dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/cloudflared.log"
+          exit 1
+
+      - name: Upload the live URL
+        uses: actions/upload-artifact@v4
+        with:
+          name: farbi-live-url
+          path: ${{ runner.temp }}/farbi-live-url.txt
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Keep FARBI online
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "FARBI is live at $FARBI_TUNNEL_URL"
+          for i in {1..66}; do
+            curl -fsS "$FARBI_TUNNEL_URL/" >/dev/null
+            echo "heartbeat $i — $FARBI_TUNNEL_URL"
+            sleep 300
+          done

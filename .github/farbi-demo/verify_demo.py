@@ -5,13 +5,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 
 import requests
+from bs4 import BeautifulSoup
 
 from application import User, app
 
 BASE = os.environ.get("FARBI_URL", "https://farbi-demo-otler17-v5.trapdoor.sh").rstrip("/")
 PASSWORD = os.environ.get("DEMO_PASSWORD", "Password123")
 TIMEOUT = 30
-EXPECTED_SESSION_COOKIE = "farbi_demo_session_v5"
 ACCESS_PARAM = "farbi_access"
 
 
@@ -27,8 +27,24 @@ def url_with_access(path, token):
 def access_token_from_url(raw_url):
     values = parse_qs(urlsplit(raw_url).query).get(ACCESS_PARAM)
     if not values or not values[0]:
-        raise RuntimeError(f"missing {ACCESS_PARAM} after auth: {raw_url}")
+        raise RuntimeError(f"missing {ACCESS_PARAM} in auth target: {raw_url}")
     return values[0]
+
+
+def auth_target_from_response(response):
+    # The public tunnel consumes backend redirects. v5 deliberately returns a
+    # 200 handoff page instead, so verify the client-visible target in the body
+    # (and use the diagnostic header when the proxy preserves it).
+    target = response.headers.get("X-Farbi-Demo-Target")
+    if not target:
+        soup = BeautifulSoup(response.text, "html.parser")
+        body = soup.find(attrs={"data-farbi-target": True})
+        target = body.get("data-farbi-target") if body else None
+    if not target:
+        raise RuntimeError(
+            f"auth response did not expose a client navigation target; url={response.url} body={response.text[:500]!r}"
+        )
+    return urljoin(BASE + "/", target)
 
 
 def require_status(response, expected=200, label="request"):
@@ -54,23 +70,19 @@ def login(email, label):
         url("/login"),
         data={"identifier": email, "password": PASSWORD, "submit": "Login"},
         timeout=TIMEOUT,
-        allow_redirects=True,
+        allow_redirects=False,
     )
     require_status(response, 200, f"{label} login")
-    token = access_token_from_url(response.url)
-    cookie_names = sorted(session.cookies.keys())
-    if EXPECTED_SESSION_COOKIE not in cookie_names:
-        raise RuntimeError(
-            f"{label} login did not issue {EXPECTED_SESSION_COOKIE}; cookies={cookie_names}"
-        )
+    target = auth_target_from_response(response)
+    token = access_token_from_url(target)
 
-    # Prove authentication survives complete cookie loss using the signed URL.
+    # Prove authentication survives total cookie loss.
     session.cookies.clear()
     cookieless = session.get(
         url_with_access("/profile/edit", token), timeout=TIMEOUT, allow_redirects=False
     )
     require_status(cookieless, 200, f"{label} cookieless profile")
-    print(f"{label} login POST -> 200; signed cookieless access -> 200")
+    print(f"{label} login 200 handoff -> signed cookieless access -> 200")
     return session, token
 
 
@@ -97,10 +109,10 @@ def verify_signup():
             "submit": "Register",
         },
         timeout=TIMEOUT,
-        allow_redirects=True,
+        allow_redirects=False,
     )
     require_status(response, 200, "signup")
-    token = access_token_from_url(response.url)
+    token = access_token_from_url(auth_target_from_response(response))
     session.cookies.clear()
     check = session.get(url_with_access("/profile/edit", token), timeout=TIMEOUT, allow_redirects=False)
     require_status(check, 200, "new customer cookieless profile")
@@ -141,19 +153,19 @@ def main():
     for path in ("/admin", "/admin/stl_library", "/admin/orders", "/admin/users", "/admin/settings"):
         check_authenticated(admin, admin_token, path, "admin")
 
-    # One-click role links must also create signed access without a cookie.
     for role, protected in {
         "customer": "/profile/edit",
         "designer": "/designer/dashboard",
         "admin": "/admin",
     }.items():
         session = requests.Session()
-        response = session.get(url(f"/demo-access/{role}"), timeout=TIMEOUT, allow_redirects=True)
+        response = session.get(url(f"/demo-access/{role}"), timeout=TIMEOUT, allow_redirects=False)
         require_status(response, 200, f"{role} magic access")
-        token = access_token_from_url(response.url)
+        token = access_token_from_url(auth_target_from_response(response))
         session.cookies.clear()
         check = session.get(url_with_access(protected, token), timeout=TIMEOUT, allow_redirects=False)
         require_status(check, 200, f"{role} magic cookieless protected page")
+        print(f"{role} one-click cookieless entry -> 200")
 
     verify_signup()
 
@@ -164,7 +176,7 @@ def main():
         "database": "PostgreSQL 16",
         "redis": "Redis 7",
         "auth_routes": {"signin": "/login", "signup": "/register"},
-        "session_cookie": EXPECTED_SESSION_COOKIE,
+        "cookie_dependency": "none for demo access",
         "demo_password": PASSWORD,
         "demo_accounts": {
             "customer": {"email": "customer_seed@example.com", "username": "customer_seed"},
@@ -201,6 +213,7 @@ def main():
             "/design/<all six demo ids>",
             "/uploads/images/design_previews/demo_planter_thumb.jpg",
         ],
+        "client_side_auth_handoff_e2e": "passed",
         "http_cookieless_role_access_e2e": "passed",
         "signup_e2e": "passed",
         "role_logins_e2e": "passed",

@@ -64,7 +64,6 @@ jobs:
           d=float(sys.argv[1])
           if d > 15.0:
               ratio=d/15.0
-              # chain atempo if needed, though expected ratio is close to 1
               filters=[]
               while ratio > 2.0:
                   filters.append('atempo=2.0'); ratio/=2.0
@@ -103,3 +102,5 @@ jobs:
             out/copy_ar.txt
           if-no-files-found: error
           retention-days: 1
+
+# trigger

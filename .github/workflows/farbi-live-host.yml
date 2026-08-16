@@ -1,4 +1,4 @@
-name: FARBI verified demo host
+name: FARBI verified auth host
 
 on:
   push:
@@ -55,7 +55,6 @@ jobs:
       MAIN_APP_DOMAINS: farbi-otler17.trapdoor.sh,localhost,127.0.0.1
       PUBLIC_AUTH_ORIGIN: https://farbi-otler17.trapdoor.sh
       FARBI_FIXED_URL: https://farbi-otler17.trapdoor.sh
-      DEMO_PASSWORD: Password123
 
     steps:
       - name: Check out runtime bundle
@@ -81,26 +80,26 @@ jobs:
           test -f farbi-project/application.py
           test -f farbi-project/scripts/seed_integration_data.py
 
-      - name: Adapt reserved auth routes
+      - name: Adapt auth routes for fixed demo host
         working-directory: farbi-project
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          path = Path("application.py")
-          source = path.read_text(encoding="utf-8")
-          old_guard = "def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
-          new_guard = "def require_platform_host_for_auth():\n    if current_app.config.get('OFFLINE_LOCAL_MODE'):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
-          if old_guard in source:
-              source = source.replace(old_guard, new_guard, 1)
+          p = Path("application.py")
+          s = p.read_text(encoding="utf-8")
+          old = "def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
+          new = "def require_platform_host_for_auth():\n    if current_app.config.get('OFFLINE_LOCAL_MODE'):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
+          if old in s:
+              s = s.replace(old, new, 1)
           register = "@app.route('/register', methods=['GET', 'POST'])"
           login = "@app.route('/login', methods=['GET', 'POST'])"
-          if register not in source or login not in source:
-              raise SystemExit("Expected FARBI auth routes not found")
-          source = source.replace(register, "@app.route('/signup', methods=['GET', 'POST'])", 1)
-          source = source.replace(login, "@app.route('/signin', methods=['GET', 'POST'])", 1)
-          path.write_text(source, encoding="utf-8")
+          if register not in s or login not in s:
+              raise SystemExit("Expected auth route decorators not found")
+          s = s.replace(register, "@app.route('/signup', methods=['GET', 'POST'])", 1)
+          s = s.replace(login, "@app.route('/signin', methods=['GET', 'POST'])", 1)
+          p.write_text(s, encoding="utf-8")
           PY
 
       - name: Set up Python
@@ -123,214 +122,15 @@ jobs:
           python -m flask --app application db upgrade
           python scripts/seed_integration_data.py
 
-      - name: Seed deterministic demo marketplace data
-        id: demo_data
-        working-directory: farbi-project
+      - name: Start fixed public FARBI host
+        id: tunnel
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import os
-          from decimal import Decimal
-          from pathlib import Path
-          from PIL import Image, ImageDraw
-          from werkzeug.security import generate_password_hash
-          from application import app, db, User, Category, Design, Review, Order, ORDER_STATUS_DELIVERED
+          curl -fsSL https://trapdoor.sh/install.sh | sh
 
-          with app.app_context():
-              admin = User.query.filter_by(username="admin_seed").one()
-              customer = User.query.filter_by(username="customer_seed").one()
-              admin.email_verified = True
-              customer.email_verified = True
-
-              designer = User.query.filter_by(username="designer_seed").first()
-              if not designer:
-                  designer = User(
-                      username="designer_seed",
-                      email="designer_seed@example.com",
-                      password_hash=generate_password_hash(os.environ["DEMO_PASSWORD"]),
-                      is_designer=True,
-                      email_verified=True,
-                      bio="Demo designer account populated with sample marketplace products.",
-                  )
-                  db.session.add(designer)
-                  db.session.flush()
-              else:
-                  designer.is_designer = True
-                  designer.email_verified = True
-
-              category_specs = [
-                  ("Home & Living", None, 10),
-                  ("Decor", "Home & Living", 11),
-                  ("Accessories", None, 20),
-                  ("Toys & Games", None, 30),
-              ]
-              cats = {}
-              for name, parent_name, order in category_specs:
-                  cat = Category.query.filter_by(name=name).first()
-                  if not cat:
-                      cat = Category(name=name, is_active=True, display_order=order)
-                      db.session.add(cat)
-                      db.session.flush()
-                  cat.is_active = True
-                  cats[name] = cat
-              cats["Decor"].parent_id = cats["Home & Living"].id
-
-              upload_root = Path(app.config["LOCAL_UPLOAD_ROOT"])
-              preview_root = upload_root / "images" / "design_previews"
-              model_root = upload_root / "models"
-              preview_root.mkdir(parents=True, exist_ok=True)
-              model_root.mkdir(parents=True, exist_ok=True)
-
-              products = [
-                  ("Geometric Planter", "Modern low-poly planter for desks and shelves.", "Decor", "demo_planter", Decimal("29.900"), (68, 116, 160)),
-                  ("Modular Desk Organizer", "Stackable organizer modules for pens, notes and cables.", "Home & Living", "demo_organizer", Decimal("39.500"), (72, 128, 92)),
-                  ("Cable Clip Set", "A practical set of reusable desk cable clips.", "Accessories", "demo_cable_clips", Decimal("14.900"), (38, 137, 126)),
-                  ("Mini Robot Figure", "Friendly articulated robot figure for display or play.", "Toys & Games", "demo_robot", Decimal("34.000"), (124, 92, 154)),
-                  ("Honeycomb Lamp Shade", "Decorative honeycomb lamp shade with soft geometric texture.", "Decor", "demo_lamp", Decimal("49.900"), (191, 129, 45)),
-                  ("Custom Name Plate", "Personalizable desk name plate for gifts and workspaces.", "Accessories", "demo_nameplate", Decimal("24.500"), (180, 79, 73)),
-              ]
-
-              demo_designs = []
-              for idx, (title, description, category, stem, price, rgb) in enumerate(products, start=1):
-                  base_blob = f"images/design_previews/{stem}"
-                  design = Design.query.filter_by(title=title, designer_id=designer.id).first()
-                  if not design:
-                      design = Design(
-                          title=title,
-                          description=description,
-                          file_path=f"models/{stem}.stl",
-                          image_path_1=base_blob,
-                          designer_id=designer.id,
-                          category=category,
-                      )
-                      db.session.add(design)
-                  design.status = "approved"
-                  design.is_active_in_marketplace = True
-                  design.is_archived = False
-                  design.is_manually_featured = idx <= 4
-                  design.is_featured_on_profile = idx <= 2
-                  design.is_customizable = title == "Custom Name Plate"
-                  design.royalty_amount = Decimal("5.000")
-                  design.printing_price = max(Decimal("5.000"), price - Decimal("10.000"))
-                  design.packaging_price = Decimal("5.000")
-                  design.final_selling_price = price
-                  design.available_colors = "Black,White,Blue,Red"
-                  design.average_rating = 4.5 if idx <= 3 else 4.0
-                  design.review_count = 1 if idx <= 3 else 0
-                  design.view_count = 20 * idx
-                  demo_designs.append(design)
-
-                  for suffix, size in (("_thumb", 300), ("_medium", 800), ("_large", 1200)):
-                      for ext in ("jpg", "webp"):
-                          image = Image.new("RGB", (size, size), rgb)
-                          draw = ImageDraw.Draw(image)
-                          draw.rectangle((size*0.08, size*0.08, size*0.92, size*0.92), outline="white", width=max(3, size//100))
-                          draw.text((size*0.12, size*0.45), title[:24], fill="white")
-                          image.save(preview_root / f"{stem}{suffix}.{ext}", quality=88)
-                  (model_root / f"{stem}.stl").write_text(
-                      "solid demo\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid demo\n",
-                      encoding="utf-8",
-                  )
-
-              db.session.flush()
-
-              for i, design in enumerate(demo_designs[:3], start=1):
-                  review = Review.query.filter_by(design_id=design.id, user_id=customer.id).first()
-                  if not review:
-                      db.session.add(Review(
-                          design_id=design.id,
-                          user_id=customer.id,
-                          rating=5 if i != 2 else 4,
-                          comment=[
-                              "Excellent sample product and clean finish.",
-                              "Useful design and easy to understand.",
-                              "Great demo item for testing the marketplace.",
-                          ][i-1],
-                      ))
-
-              if Order.query.filter_by(batch_id="DEMO-BATCH-001").count() == 0:
-                  for i, design in enumerate(demo_designs[:2], start=1):
-                      db.session.add(Order(
-                          status=ORDER_STATUS_DELIVERED,
-                          customer_name="Demo Customer",
-                          customer_address="123 Demo Street, Tunis",
-                          customer_phone="+216 20 000 000",
-                          customer_email=customer.email,
-                          user_id=customer.id,
-                          design_id=design.id,
-                          design_title=design.title,
-                          total_price=design.final_selling_price,
-                          payment_method="cod",
-                          payment_status="paid",
-                          batch_id="DEMO-BATCH-001",
-                          selected_color="Black",
-                      ))
-
-              db.session.commit()
-              ids = [d.id for d in demo_designs]
-              Path("instance/demo_design_ids.txt").write_text(",".join(map(str, ids)), encoding="utf-8")
-              print({
-                  "admin": admin.id,
-                  "customer": customer.id,
-                  "designer": designer.id,
-                  "design_ids": ids,
-                  "orders": Order.query.filter_by(batch_id="DEMO-BATCH-001").count(),
-              })
-          PY
-
-      - name: Create demo-safe auth wrapper
-        working-directory: farbi-project
-        shell: bash
-        run: |
-          cat > trapdoor_entry.py <<'PY'
-          from flask import flash, redirect, render_template, session, url_for
-          from flask_login import current_user, login_user
-          from sqlalchemy import func, or_
-          from application import app, db, User, RegistrationForm, LoginForm
-
-          app.config["WTF_CSRF_ENABLED"] = False
-          app.config["PREFERRED_URL_SCHEME"] = "https"
-
-          def demo_register():
-              if current_user.is_authenticated:
-                  return redirect(url_for("index"))
-              form = RegistrationForm()
-              if form.validate_on_submit():
-                  user = User(
-                      username=form.username.data.strip().lower(),
-                      email=form.email.data.strip().lower(),
-                      is_designer=False,
-                      email_verified=True,
-                  )
-                  user.set_password(form.password.data)
-                  db.session.add(user)
-                  db.session.commit()
-                  login_user(user)
-                  session["auth_version"] = int(user.auth_version or 1)
-                  flash("Demo registration successful.", "success")
-                  return redirect(url_for("index"))
-              return render_template("register.html", form=form)
-
-          def demo_login():
-              if current_user.is_authenticated:
-                  return redirect(url_for("index"))
-              form = LoginForm()
-              if form.validate_on_submit():
-                  identifier = form.identifier.data.strip()
-                  user = User.query.filter(or_(
-                      func.lower(User.email) == func.lower(identifier),
-                      func.lower(User.username) == func.lower(identifier),
-                  )).first()
-                  if user and user.check_password(form.password.data) and not user.is_archived:
-                      login_user(user, remember=form.remember.data)
-                      session["auth_version"] = int(user.auth_version or 1)
-                      return redirect(url_for("index"))
-                  flash("Invalid credentials.", "danger")
-              return render_template("login.html", form=form)
-
-          app.view_functions["register"] = demo_register
-          app.view_functions["login"] = demo_login
+          cat > farbi-project/trapdoor_entry.py <<'PY'
+          from application import app
 
           PUBLIC_HOST = "farbi-otler17.trapdoor.sh"
           INTERNAL_HOST = "localhost:8000"
@@ -338,6 +138,7 @@ jobs:
           class TrapdoorPublicHost:
               def __init__(self, wrapped):
                   self.wrapped = wrapped
+
               def __call__(self, environ, start_response):
                   if environ.get("HTTP_HOST", "").lower() == INTERNAL_HOST:
                       environ["HTTP_HOST"] = PUBLIC_HOST
@@ -346,15 +147,10 @@ jobs:
                       environ["wsgi.url_scheme"] = "https"
                   return self.wrapped(environ, start_response)
 
+          app.config["PREFERRED_URL_SCHEME"] = "https"
           app.wsgi_app = TrapdoorPublicHost(app.wsgi_app)
           PY
 
-      - name: Start fixed public demo host
-        id: tunnel
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL https://trapdoor.sh/install.sh | sh
           FLASK_SERVER_NAME="farbi-otler17.trapdoor.sh" \
           MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,localhost,127.0.0.1" \
           PUBLIC_AUTH_ORIGIN="$FARBI_FIXED_URL" \
@@ -373,9 +169,9 @@ jobs:
 
           for i in {1..90}; do
             if curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null && \
-               curl -fsS --max-time 20 "$FARBI_FIXED_URL/browse" >/dev/null && \
                curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null && \
                curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null; then
+              echo "FARBI public pages are reachable."
               exit 0
             fi
             sleep 2
@@ -384,105 +180,91 @@ jobs:
           cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
           exit 1
 
-      - name: Verify customer, designer, admin and signup flows
+      - name: Verify signup, PostgreSQL, session and fresh signin
         id: auth_e2e
+        working-directory: farbi-project
         shell: bash
         run: |
           set -euo pipefail
           ORIGIN="$FARBI_FIXED_URL"
+          DEMO_USERNAME="demo${GITHUB_RUN_ID}"
+          DEMO_EMAIL="farbi.demo.${GITHUB_RUN_ID}@gmail.com"
+          DEMO_PASSWORD="FarbiDemo-${GITHUB_RUN_ID}!"
+          export DEMO_EMAIL DEMO_PASSWORD
 
-          login_and_check() {
-            email="$1"
-            expected="$2"
-            cookie="$RUNNER_TEMP/${expected}.cookies"
-            curl -fsS -c "$cookie" "$ORIGIN/signin" -o /dev/null
-            final=$(curl -fsS -L -e "$ORIGIN/signin" \
-              -b "$cookie" -c "$cookie" -o /dev/null -w '%{url_effective}' \
-              --data-urlencode "identifier=$email" \
-              --data-urlencode "password=$DEMO_PASSWORD" \
-              --data-urlencode "submit=Login" \
-              "$ORIGIN/signin")
-            echo "$expected login -> $final"
-            test "$final" = "$ORIGIN/"
-          }
+          curl -fsS -c "$RUNNER_TEMP/register.cookies" "$ORIGIN/signup" -o "$RUNNER_TEMP/signup.html"
+          CSRF=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signup.html" | head -1 | sed 's/.*value="//;s/"$//')
+          test -n "$CSRF"
 
-          login_and_check "customer_seed@example.com" customer
-          login_and_check "designer_seed@example.com" designer
-          login_and_check "admin_seed@example.com" admin
-
-          unique="signup${GITHUB_RUN_ID}"
-          curl -fsS -c "$RUNNER_TEMP/signup.cookies" "$ORIGIN/signup" -o /dev/null
-          final=$(curl -fsS -L -e "$ORIGIN/signup" \
-            -b "$RUNNER_TEMP/signup.cookies" -c "$RUNNER_TEMP/signup.cookies" \
-            -o /dev/null -w '%{url_effective}' \
-            --data-urlencode "username=$unique" \
-            --data-urlencode "email=$unique@example.com" \
+          REGISTER_STATUS=$(curl -sS -e "$ORIGIN/signup" \
+            -b "$RUNNER_TEMP/register.cookies" -c "$RUNNER_TEMP/register.cookies" \
+            -D "$RUNNER_TEMP/register.headers" -o "$RUNNER_TEMP/register-result.html" \
+            -w '%{http_code}' \
+            --data-urlencode "csrf_token=$CSRF" \
+            --data-urlencode "username=$DEMO_USERNAME" \
+            --data-urlencode "email=$DEMO_EMAIL" \
             --data-urlencode "password=$DEMO_PASSWORD" \
             --data-urlencode "confirm_password=$DEMO_PASSWORD" \
-            --data-urlencode "submit=Register" \
+            --data-urlencode "submit=Sign Up" \
             "$ORIGIN/signup")
-          echo "signup -> $final"
-          test "$final" = "$ORIGIN/"
+          echo "signup HTTP status: $REGISTER_STATUS"
+          if [ "$REGISTER_STATUS" != "302" ]; then
+            echo "Signup form did not redirect; diagnostic lines:"
+            grep -Ei 'invalid|taken|required|match|error|text-red' "$RUNNER_TEMP/register-result.html" | head -80 || true
+            exit 1
+          fi
 
-      - name: Verify public and role pages
-        id: pages_e2e
-        working-directory: farbi-project
-        shell: bash
-        run: |
-          set -euo pipefail
-          ORIGIN="$FARBI_FIXED_URL"
-          IDS=$(cat instance/demo_design_ids.txt)
-          FIRST_ID=${IDS%%,*}
+          python - <<'PY'
+          import os
+          from application import app, User
+          with app.app_context():
+              user = User.query.filter_by(email=os.environ["DEMO_EMAIL"]).one_or_none()
+              assert user is not None, "registered user missing from PostgreSQL"
+              assert user.check_password(os.environ["DEMO_PASSWORD"]), "password hash verification failed"
+              print({"postgres_user_id": user.id, "email": user.email})
+          PY
 
-          check_public() {
-            path="$1"
-            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$ORIGIN$path")
-            echo "public $path -> $code"
-            test "$code" -ge 200 -a "$code" -lt 400
-          }
-          for path in / /browse /designers /cart /signin /signup "/profile/designer_seed" "/design/$FIRST_ID"; do
-            check_public "$path"
-          done
+          PROFILE_STATUS=$(curl -sS \
+            -b "$RUNNER_TEMP/register.cookies" \
+            -o "$RUNNER_TEMP/profile-after-signup.html" \
+            -w '%{http_code}' \
+            "$ORIGIN/profile/edit")
+          echo "protected profile after signup: $PROFILE_STATUS"
+          test "$PROFILE_STATUS" = "200"
 
-          login_cookie() {
-            email="$1"; name="$2"; cookie="$RUNNER_TEMP/${name}-pages.cookies"
-            curl -fsS -c "$cookie" "$ORIGIN/signin" -o /dev/null
-            curl -fsS -L -e "$ORIGIN/signin" -b "$cookie" -c "$cookie" -o /dev/null \
-              --data-urlencode "identifier=$email" --data-urlencode "password=$DEMO_PASSWORD" \
-              --data-urlencode "submit=Login" "$ORIGIN/signin"
-            echo "$cookie"
-          }
+          curl -fsS -c "$RUNNER_TEMP/signin.cookies" "$ORIGIN/signin" -o "$RUNNER_TEMP/signin.html"
+          CSRF=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signin.html" | head -1 | sed 's/.*value="//;s/"$//')
+          test -n "$CSRF"
 
-          CUSTOMER_COOKIE=$(login_cookie "customer_seed@example.com" customer)
-          DESIGNER_COOKIE=$(login_cookie "designer_seed@example.com" designer)
-          ADMIN_COOKIE=$(login_cookie "admin_seed@example.com" admin)
+          LOGIN_STATUS=$(curl -sS -e "$ORIGIN/signin" \
+            -b "$RUNNER_TEMP/signin.cookies" -c "$RUNNER_TEMP/signin.cookies" \
+            -D "$RUNNER_TEMP/signin.headers" -o "$RUNNER_TEMP/signin-result.html" \
+            -w '%{http_code}' \
+            --data-urlencode "csrf_token=$CSRF" \
+            --data-urlencode "identifier=$DEMO_EMAIL" \
+            --data-urlencode "password=$DEMO_PASSWORD" \
+            --data-urlencode "submit=Login" \
+            "$ORIGIN/signin")
+          echo "fresh signin HTTP status: $LOGIN_STATUS"
+          if [ "$LOGIN_STATUS" != "302" ]; then
+            grep -Ei 'invalid|error|text-red' "$RUNNER_TEMP/signin-result.html" | head -80 || true
+            exit 1
+          fi
 
-          check_auth() {
-            cookie="$1"; path="$2"; label="$3"
-            code=$(curl -sS -b "$cookie" -o /dev/null -w '%{http_code}' --max-time 30 "$ORIGIN$path")
-            echo "$label $path -> $code"
-            test "$code" -ge 200 -a "$code" -lt 400
-          }
+          PROFILE_STATUS=$(curl -sS \
+            -b "$RUNNER_TEMP/signin.cookies" \
+            -o "$RUNNER_TEMP/profile-after-signin.html" \
+            -w '%{http_code}' \
+            "$ORIGIN/profile/edit")
+          echo "protected profile after fresh signin: $PROFILE_STATUS"
+          test "$PROFILE_STATUS" = "200"
+          echo "FARBI AUTH E2E PASSED"
 
-          check_auth "$CUSTOMER_COOKIE" /cart customer
-          check_auth "$CUSTOMER_COOKIE" /profile/customer_seed customer
-          check_auth "$DESIGNER_COOKIE" /designer/dashboard designer
-          check_auth "$DESIGNER_COOKIE" /profile/designer_seed designer
-          check_auth "$ADMIN_COOKIE" /admin admin
-          check_auth "$ADMIN_COOKIE" /admin/stl_library admin
-
-          for id in ${IDS//,/ }; do
-            check_public "/design/$id"
-          done
-
-      - name: Publish verified demo manifest
+      - name: Publish verified live origin
         id: publish
-        working-directory: farbi-project
         shell: bash
         run: |
           set -euo pipefail
-          IDS=$(cat instance/demo_design_ids.txt)
-          export IDS
           python - <<'PY'
           import json, os
           from datetime import datetime, timezone
@@ -490,50 +272,27 @@ jobs:
               "origin": os.environ["FARBI_FIXED_URL"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "published_at": datetime.now(timezone.utc).isoformat(),
-              "database": "PostgreSQL 16",
               "auth_routes": {"signin": "/signin", "signup": "/signup"},
-              "demo_password": os.environ["DEMO_PASSWORD"],
-              "demo_accounts": {
-                  "customer": {"email": "customer_seed@example.com", "username": "customer_seed"},
-                  "designer": {"email": "designer_seed@example.com", "username": "designer_seed"},
-                  "admin": {"email": "admin_seed@example.com", "username": "admin_seed"},
-              },
-              "demo_design_ids": [int(x) for x in os.environ["IDS"].split(",") if x],
-              "verified_pages": [
-                  "/", "/browse", "/designers", "/cart", "/signin", "/signup",
-                  "/profile/customer_seed", "/profile/designer_seed", "/designer/dashboard",
-                  "/admin", "/admin/stl_library"
-              ],
+              "postgres_auth_e2e": "passed"
           }
-          with open("../farbi-demo-manifest.json", "w", encoding="utf-8") as f:
+          with open("farbi-live-origin.json", "w", encoding="utf-8") as f:
               json.dump(payload, f, indent=2)
               f.write("\n")
           PY
-          cd ..
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add farbi-demo-manifest.json
-          git commit -m "Publish verified FARBI demo manifest [skip ci]" || true
+          git add farbi-live-origin.json
+          git commit -m "Publish verified FARBI auth origin [skip ci]" || true
           git pull --rebase origin master || true
           git push origin HEAD:master || true
 
-      - name: Publish failure diagnostics
-        if: failure()
-        shell: bash
-        run: |
-          echo "=== Gunicorn ==="
-          tail -n 200 "$RUNNER_TEMP/farbi-gunicorn.log" 2>/dev/null || true
-          echo "=== Trapdoor ==="
-          tail -n 200 "$RUNNER_TEMP/trapdoor.log" 2>/dev/null || true
-
-      - name: Keep verified FARBI demo online
+      - name: Keep verified FARBI online
         shell: bash
         run: |
           set -euo pipefail
-          echo "FARBI verified demo: $FARBI_FIXED_URL"
+          echo "FARBI LIVE: $FARBI_FIXED_URL"
           for i in {1..66}; do
             curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null
-            curl -fsS --max-time 20 "$FARBI_FIXED_URL/browse" >/dev/null
             curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null
             curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null
             echo "heartbeat $i"

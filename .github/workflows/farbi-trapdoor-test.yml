@@ -1,0 +1,44 @@
+name: FARBI stable tunnel hostname test
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-trapdoor-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Test fixed tunnel hostname
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8080 --bind 127.0.0.1 > /tmp/http.log 2>&1 &
+          echo $! > /tmp/http.pid
+
+          curl -fsSL https://trapdoor.sh/install.sh | sh
+          export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"
+          command -v trapdoor
+
+          trapdoor 8080 farbi-otler17 > /tmp/trapdoor.log 2>&1 &
+          echo $! > /tmp/trapdoor.pid
+
+          for i in {1..40}; do
+            cat /tmp/trapdoor.log || true
+            if curl -fsS --max-time 10 https://farbi-otler17.trapdoor.sh/ >/tmp/result.html 2>/tmp/curl.err; then
+              grep -qi 'Directory listing\|<!DOCTYPE HTML' /tmp/result.html
+              echo "FIXED_URL=https://farbi-otler17.trapdoor.sh/"
+              exit 0
+            fi
+            cat /tmp/curl.err || true
+            sleep 3
+          done
+
+          cat /tmp/trapdoor.log
+          exit 1

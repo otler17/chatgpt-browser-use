@@ -1,3 +1,5 @@
+import os
+
 from flask import flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_user
 from sqlalchemy import func, or_
@@ -84,7 +86,7 @@ def demo_login():
 app.view_functions["register"] = demo_register
 app.view_functions["login"] = demo_login
 
-PUBLIC_HOST = "farbi-otler17.trapdoor.sh"
+PUBLIC_HOST = os.environ.get("FARBI_PUBLIC_HOST", "farbi-demo-otler17.trapdoor.sh")
 INTERNAL_HOST = "localhost:8000"
 
 

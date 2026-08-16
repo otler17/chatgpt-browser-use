@@ -14,8 +14,9 @@ def login_and_check(browser, email, protected_path, label):
     page = context.new_page()
     page.goto(f"{BASE}/login", wait_until="networkidle", timeout=60000)
     page.locator('input[name="identifier"]').fill(email)
-    page.locator('input[name="password"]').fill(PASSWORD)
-    page.locator('button[type="submit"], input[type="submit"]').first.click()
+    password = page.locator('input[name="password"]')
+    password.fill(PASSWORD)
+    password.press("Enter")
     page.wait_for_load_state("networkidle", timeout=60000)
 
     cookies = context.cookies(BASE)

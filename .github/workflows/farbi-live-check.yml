@@ -13,23 +13,31 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 7
     steps:
-      - name: Check out published origin
-        uses: actions/checkout@v4
-
-      - name: Compare stable and current backend auth links
+      - name: Wait for stable auth origin refresh
         shell: bash
         run: |
           set -euo pipefail
-          ORIGIN=$(python -c 'import json; print(json.load(open("farbi-live-origin.json"))["origin"])')
           STABLE="https://farbi-marketplace.omar-gassab.chatgpt.site"
 
-          for BASE in "$ORIGIN" "$STABLE"; do
-            echo "=== $BASE ==="
-            curl -fsS "$BASE/" -o /tmp/home.html
+          for i in {1..20}; do
+            echo "refresh check $i"
+            curl -fsS "$STABLE/" -o /tmp/home.html
+            if grep -q 'href="/signin"' /tmp/home.html && grep -q 'href="/signup"' /tmp/home.html; then
+              echo "Stable homepage is on the remapped auth backend."
+              for ROUTE in /signin /signup; do
+                RESULT=$(curl -fsSL --max-time 30 --max-redirs 3 -o /tmp/auth.html -w '%{http_code} %{num_redirects} %{url_effective}' "$STABLE$ROUTE")
+                echo "$ROUTE -> $RESULT"
+                test "$(awk '{print $1}' <<< "$RESULT")" = "200"
+                test "$(awk '{print $2}' <<< "$RESULT")" = "0"
+                grep -qi '<form' /tmp/auth.html
+              done
+              exit 0
+            fi
             grep -Eo 'href="[^"]*(login|signin|register|signup)[^"]*"' /tmp/home.html | sort -u || true
-            for ROUTE in /signin /signup; do
-              curl -sS -o /dev/null -w "$ROUTE status=%{http_code} redirects=%{num_redirects}\n" --max-redirs 0 "$BASE$ROUTE" || true
-            done
+            sleep 15
           done
+
+          echo "Stable origin did not refresh within the verification window."
+          exit 1

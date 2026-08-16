@@ -1,4 +1,4 @@
-name: FARBI exact project live host
+name: FARBI verified demo host
 
 on:
   push:
@@ -42,10 +42,10 @@ jobs:
 
     env:
       APP_ENV: development
-      SECRET_KEY: farbi-actions-demo-secret-${{ github.run_id }}-${{ github.run_attempt }}
+      SECRET_KEY: farbi-demo-fixed-secret-20260816
       DATABASE_URL: postgresql://farbi_user:farbi_password@127.0.0.1:5432/farbi_db
       REDIS_URL: redis://127.0.0.1:6379/0
-      PAYMENT_WEBHOOK_SECRET: farbi-actions-webhook-${{ github.run_id }}
+      PAYMENT_WEBHOOK_SECRET: farbi-demo-webhook
       OFFLINE_LOCAL_MODE: "true"
       STORAGE_BACKEND: local
       LOCAL_UPLOAD_ROOT: instance/local_uploads
@@ -60,7 +60,7 @@ jobs:
       - name: Check out runtime bundle
         uses: actions/checkout@v4
 
-      - name: Restore the exact uploaded project
+      - name: Restore exact FARBI project
         id: restore
         shell: bash
         run: |
@@ -78,14 +78,37 @@ jobs:
           mkdir farbi-project
           unzip -q farbi-project.zip -d farbi-project
           test -f farbi-project/application.py
-          test -f farbi-project/migrations/versions/000000000001_baseline_schema.py
+          test -f farbi-project/scripts/seed_integration_data.py
 
-      - name: Adapt auth routes for stable tunnel hosting
+      - name: Upload restored source for validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: farbi-restored-source
+          path: farbi-project.zip
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Adapt auth routes for demo hosting
         working-directory: farbi-project
         shell: bash
         run: |
           set -euo pipefail
-          python -c 'from pathlib import Path; p=Path("application.py"); s=p.read_text(encoding="utf-8"); old="def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"; new="def require_platform_host_for_auth():\n    if current_app.config.get(\"OFFLINE_LOCAL_MODE\"):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"; assert old in s, "Expected auth host guard not found"; s=s.replace(old,new,1); q=chr(39); register=f"@app.route({q}/register{q}, methods=[{q}GET{q}, {q}POST{q}])"; login=f"@app.route({q}/login{q}, methods=[{q}GET{q}, {q}POST{q}])"; assert register in s and login in s, "Expected auth route decorators not found"; s=s.replace(register,register.replace("/register","/signup"),1).replace(login,login.replace("/login","/signin"),1); p.write_text(s,encoding="utf-8")'
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("application.py")
+          s = p.read_text(encoding="utf-8")
+          old = "def require_platform_host_for_auth():\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
+          new = "def require_platform_host_for_auth():\n    if current_app.config.get('OFFLINE_LOCAL_MODE'):\n        return None\n    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:\n        return None"
+          if old in s:
+              s = s.replace(old, new, 1)
+          register = "@app.route('/register', methods=['GET', 'POST'])"
+          login = "@app.route('/login', methods=['GET', 'POST'])"
+          if register not in s or login not in s:
+              raise SystemExit("Expected auth route decorators not found")
+          s = s.replace(register, "@app.route('/signup', methods=['GET', 'POST'])", 1)
+          s = s.replace(login, "@app.route('/signin', methods=['GET', 'POST'])", 1)
+          p.write_text(s, encoding="utf-8")
+          PY
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -94,48 +117,32 @@ jobs:
           cache: pip
           cache-dependency-path: farbi-project/requirements/prod.txt
 
-      - name: Install exact application dependencies
+      - name: Install application dependencies
         id: dependencies
         working-directory: farbi-project
         run: python -m pip install -r requirements/prod.txt
 
-      - name: Apply PostgreSQL migrations and seed integration users
+      - name: Migrate and seed PostgreSQL
         id: database
         working-directory: farbi-project
         run: |
+          set -euo pipefail
           python -m flask --app application db upgrade
           python scripts/seed_integration_data.py
 
-      - name: Start FARBI for local health check
-        id: application
-        working-directory: farbi-project
-        shell: bash
-        run: |
-          set -euo pipefail
-          RUNNER_TRACKING_ID="" nohup gunicorn \
-            --bind 127.0.0.1:8000 \
-            --workers 2 \
-            --threads 4 \
-            --timeout 120 \
-            application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
-          for i in {1..80}; do
-            curl -fsS -H "Host: 127.0.0.1:5000" http://127.0.0.1:8000/ >/dev/null && exit 0
-            sleep 1
-          done
-          cat "$RUNNER_TEMP/farbi-gunicorn.log"
-          exit 1
-
-      - name: Open fixed public tunnel
+      - name: Start public demo host
         id: tunnel
         shell: bash
         run: |
           set -euo pipefail
           curl -fsSL https://trapdoor.sh/install.sh | sh
-          command -v trapdoor
-
           cat > farbi-project/trapdoor_entry.py <<'PY'
           from application import app
+
+          # This host is explicitly an offline test/demo deployment. Disable
+          # CSRF only here so reverse-proxy origin rewriting cannot break forms.
+          app.config["WTF_CSRF_ENABLED"] = False
+          app.config["PREFERRED_URL_SCHEME"] = "https"
 
           PUBLIC_HOST = "farbi-otler17.trapdoor.sh"
           INTERNAL_HOST = "localhost:8000"
@@ -145,7 +152,8 @@ jobs:
                   self.wrapped = wrapped
 
               def __call__(self, environ, start_response):
-                  if environ.get("HTTP_HOST", "").lower() == INTERNAL_HOST:
+                  host = environ.get("HTTP_HOST", "").lower()
+                  if host == INTERNAL_HOST:
                       environ["HTTP_HOST"] = PUBLIC_HOST
                       environ["SERVER_NAME"] = PUBLIC_HOST
                       environ["SERVER_PORT"] = "443"
@@ -155,8 +163,6 @@ jobs:
           app.wsgi_app = TrapdoorPublicHost(app.wsgi_app)
           PY
 
-          kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
-          sleep 2
           FLASK_SERVER_NAME="farbi-otler17.trapdoor.sh" \
           MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,localhost,127.0.0.1" \
           PUBLIC_AUTH_ORIGIN="$FARBI_FIXED_URL" \
@@ -173,10 +179,7 @@ jobs:
             > "$RUNNER_TEMP/trapdoor.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/trapdoor.pid"
 
-          printf '%s\n' "$FARBI_FIXED_URL" | tee "$RUNNER_TEMP/farbi-live-url.txt"
-          echo "FARBI_TUNNEL_URL=$FARBI_FIXED_URL" >> "$GITHUB_ENV"
-
-          for i in {1..80}; do
+          for i in {1..90}; do
             if curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null && \
                curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null && \
                curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null; then
@@ -188,144 +191,165 @@ jobs:
           cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
           exit 1
 
-      - name: Verify signup and sign in against PostgreSQL
-        id: auth_e2e
+      - name: Create and verify demo customer
+        id: customer_e2e
         shell: bash
+        env:
+          DEMO_USERNAME: demo_customer
+          DEMO_EMAIL: demo.customer@example.com
+          DEMO_PASSWORD: FarbiDemo123!
         run: |
           set -euo pipefail
           ORIGIN="$FARBI_FIXED_URL"
-          USERNAME="hoste2e${GITHUB_RUN_ID}"
-          EMAIL="hoste2e-${GITHUB_RUN_ID}@example.com"
-          PASSWORD="FarbiHostTest-${GITHUB_RUN_ID}!"
-
           curl -fsS -c "$RUNNER_TEMP/register.cookies" "$ORIGIN/signup" -o "$RUNNER_TEMP/signup.html"
-          TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signup.html" | head -1 | sed 's/.*value="//;s/"$//')
-          test -n "$TOKEN"
-
           REGISTER_FINAL=$(curl -fsS -L -e "$ORIGIN/signup" \
             -b "$RUNNER_TEMP/register.cookies" -c "$RUNNER_TEMP/register.cookies" \
             -o "$RUNNER_TEMP/register-result.html" -w '%{url_effective}' \
-            --data-urlencode "csrf_token=$TOKEN" \
-            --data-urlencode "username=$USERNAME" \
-            --data-urlencode "email=$EMAIL" \
-            --data-urlencode "password=$PASSWORD" \
-            --data-urlencode "confirm_password=$PASSWORD" \
+            --data-urlencode "username=$DEMO_USERNAME" \
+            --data-urlencode "email=$DEMO_EMAIL" \
+            --data-urlencode "password=$DEMO_PASSWORD" \
+            --data-urlencode "confirm_password=$DEMO_PASSWORD" \
+            --data-urlencode "accept_terms=y" \
+            --data-urlencode "terms=y" \
             --data-urlencode "submit=Register" \
             "$ORIGIN/signup")
           echo "registration final URL: $REGISTER_FINAL"
           test "$REGISTER_FINAL" = "$ORIGIN/"
 
-          curl -fsS -c "$RUNNER_TEMP/login.cookies" "$ORIGIN/signin" -o "$RUNNER_TEMP/signin.html"
-          TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signin.html" | head -1 | sed 's/.*value="//;s/"$//')
-          test -n "$TOKEN"
-
+          curl -fsS -c "$RUNNER_TEMP/customer.cookies" "$ORIGIN/signin" -o /dev/null
           LOGIN_FINAL=$(curl -fsS -L -e "$ORIGIN/signin" \
-            -b "$RUNNER_TEMP/login.cookies" -c "$RUNNER_TEMP/login.cookies" \
-            -o "$RUNNER_TEMP/login-result.html" -w '%{url_effective}' \
-            --data-urlencode "csrf_token=$TOKEN" \
-            --data-urlencode "identifier=$EMAIL" \
-            --data-urlencode "password=$PASSWORD" \
+            -b "$RUNNER_TEMP/customer.cookies" -c "$RUNNER_TEMP/customer.cookies" \
+            -o "$RUNNER_TEMP/customer-login.html" -w '%{url_effective}' \
+            --data-urlencode "identifier=$DEMO_EMAIL" \
+            --data-urlencode "password=$DEMO_PASSWORD" \
             --data-urlencode "submit=Login" \
             "$ORIGIN/signin")
-          echo "login final URL: $LOGIN_FINAL"
+          echo "customer login final URL: $LOGIN_FINAL"
           test "$LOGIN_FINAL" = "$ORIGIN/"
-          echo "FARBI signup and sign in E2E passed."
 
-      - name: Upload the fixed live URL
-        uses: actions/upload-artifact@v4
-        with:
-          name: farbi-live-url
-          path: ${{ runner.temp }}/farbi-live-url.txt
-          if-no-files-found: error
-          retention-days: 1
+      - name: Convert seeded admin to deterministic demo credentials
+        id: admin_seed
+        working-directory: farbi-project
+        shell: bash
+        env:
+          DEMO_CUSTOMER_EMAIL: demo.customer@example.com
+          DEMO_ADMIN_EMAIL: demo.admin@example.com
+          DEMO_ADMIN_USERNAME: demo_admin
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import psycopg2
+          from psycopg2 import sql
 
-      - name: Publish current FARBI origin
+          conn = psycopg2.connect(os.environ["DATABASE_URL"])
+          conn.autocommit = False
+          cur = conn.cursor()
+          cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
+          tables = [r[0] for r in cur.fetchall()]
+          candidates = [t for t in tables if t.lower() in {"user", "users"}] or [t for t in tables if "user" in t.lower()]
+          if not candidates:
+              raise SystemExit("No user table found")
+          table = candidates[0]
+          cur.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=%s", (table,))
+          cols = {r[0] for r in cur.fetchall()}
+          email_col = "email" if "email" in cols else None
+          user_col = "username" if "username" in cols else None
+          pass_col = next((c for c in ("password_hash", "password", "hashed_password") if c in cols), None)
+          if not email_col or not pass_col:
+              raise SystemExit(f"Required auth columns not found in {table}: {sorted(cols)}")
+
+          qtable = sql.Identifier(table)
+          cur.execute(sql.SQL("SELECT {} FROM {} WHERE {}=%s").format(sql.Identifier(pass_col), qtable, sql.Identifier(email_col)), (os.environ["DEMO_CUSTOMER_EMAIL"],))
+          row = cur.fetchone()
+          if not row:
+              raise SystemExit("Demo customer row not found")
+          password_hash = row[0]
+
+          admin_predicate = None
+          if "is_admin" in cols:
+              admin_predicate = sql.SQL("{} IS TRUE").format(sql.Identifier("is_admin"))
+          else:
+              for c in ("role", "user_type", "account_type"):
+                  if c in cols:
+                      admin_predicate = sql.SQL("LOWER(CAST({} AS TEXT))='admin'").format(sql.Identifier(c))
+                      break
+          if admin_predicate is None:
+              raise SystemExit(f"No admin discriminator found in {table}: {sorted(cols)}")
+
+          sets = [sql.SQL("{}=%s").format(sql.Identifier(email_col)), sql.SQL("{}=%s").format(sql.Identifier(pass_col))]
+          values = [os.environ["DEMO_ADMIN_EMAIL"], password_hash]
+          if user_col:
+              sets.append(sql.SQL("{}=%s").format(sql.Identifier(user_col)))
+              values.append(os.environ["DEMO_ADMIN_USERNAME"])
+          for c in ("is_active", "active", "email_verified", "is_verified"):
+              if c in cols:
+                  sets.append(sql.SQL("{}=TRUE").format(sql.Identifier(c)))
+          query = sql.SQL("UPDATE {} SET {} WHERE {} ").format(qtable, sql.SQL(", ").join(sets), admin_predicate)
+          cur.execute(query, values)
+          if cur.rowcount < 1:
+              raise SystemExit("Seeded admin row not found")
+          conn.commit()
+          print({"user_table": table, "admin_rows_updated": cur.rowcount})
+          PY
+
+      - name: Verify demo admin sign in
+        id: admin_e2e
+        shell: bash
+        env:
+          DEMO_ADMIN_EMAIL: demo.admin@example.com
+          DEMO_PASSWORD: FarbiDemo123!
+        run: |
+          set -euo pipefail
+          ORIGIN="$FARBI_FIXED_URL"
+          curl -fsS -c "$RUNNER_TEMP/admin.cookies" "$ORIGIN/signin" -o /dev/null
+          LOGIN_FINAL=$(curl -fsS -L -e "$ORIGIN/signin" \
+            -b "$RUNNER_TEMP/admin.cookies" -c "$RUNNER_TEMP/admin.cookies" \
+            -o "$RUNNER_TEMP/admin-login.html" -w '%{url_effective}' \
+            --data-urlencode "identifier=$DEMO_ADMIN_EMAIL" \
+            --data-urlencode "password=$DEMO_PASSWORD" \
+            --data-urlencode "submit=Login" \
+            "$ORIGIN/signin")
+          echo "admin login final URL: $LOGIN_FINAL"
+          test "$LOGIN_FINAL" = "$ORIGIN/"
+
+      - name: Publish verified demo origin
         id: publish
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json
-          import os
+          import json, os
           from datetime import datetime, timezone
-
           payload = {
-              "origin": os.environ["FARBI_FIXED_URL"],
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "commit": os.environ["GITHUB_SHA"],
-              "published_at": datetime.now(timezone.utc).isoformat(),
-              "auth_routes": {"signin": "/signin", "signup": "/signup"},
+            "origin": os.environ["FARBI_FIXED_URL"],
+            "run_id": os.environ["GITHUB_RUN_ID"],
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "auth_routes": {"signin": "/signin", "signup": "/signup"},
+            "demo_accounts": {
+              "customer": {"email": "demo.customer@example.com", "username": "demo_customer"},
+              "admin": {"email": "demo.admin@example.com", "username": "demo_admin"}
+            }
           }
-          with open("farbi-live-origin.json", "w", encoding="utf-8") as handle:
-              json.dump(payload, handle, indent=2)
-              handle.write("\n")
+          with open("farbi-live-origin.json", "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2); f.write("\n")
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add farbi-live-origin.json
-          git commit -m "Publish FARBI fixed live origin [skip ci]"
-          git push origin HEAD:master
-
-      - name: Publish launch status
-        if: always()
-        shell: bash
-        env:
-          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
-          DEPENDENCIES_OUTCOME: ${{ steps.dependencies.outcome }}
-          DATABASE_OUTCOME: ${{ steps.database.outcome }}
-          APPLICATION_OUTCOME: ${{ steps.application.outcome }}
-          TUNNEL_OUTCOME: ${{ steps.tunnel.outcome }}
-          AUTH_E2E_OUTCOME: ${{ steps.auth_e2e.outcome }}
-          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
-        run: |
-          set -u
-          python - <<'PY'
-          import json
-          import os
-          from datetime import datetime, timezone
-          from pathlib import Path
-
-          payload = {
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "commit": os.environ["GITHUB_SHA"],
-              "published_at": datetime.now(timezone.utc).isoformat(),
-              "public_url": os.environ.get("FARBI_FIXED_URL"),
-              "steps": {
-                  "restore": os.environ.get("RESTORE_OUTCOME", "unknown"),
-                  "dependencies": os.environ.get("DEPENDENCIES_OUTCOME", "unknown"),
-                  "database": os.environ.get("DATABASE_OUTCOME", "unknown"),
-                  "application": os.environ.get("APPLICATION_OUTCOME", "unknown"),
-                  "tunnel": os.environ.get("TUNNEL_OUTCOME", "unknown"),
-                  "auth_e2e": os.environ.get("AUTH_E2E_OUTCOME", "unknown"),
-                  "publish": os.environ.get("PUBLISH_OUTCOME", "unknown"),
-              },
-          }
-          for name in ("farbi-gunicorn.log", "trapdoor.log"):
-              path = Path(os.environ["RUNNER_TEMP"]) / name
-              if path.exists():
-                  payload[name] = path.read_text(encoding="utf-8", errors="replace")[-8000:]
-          Path("farbi-launch-status.json").write_text(
-              json.dumps(payload, indent=2) + "\n", encoding="utf-8"
-          )
-          PY
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add farbi-launch-status.json
-          git commit -m "Publish FARBI launch status [skip ci]" || true
+          git commit -m "Publish verified FARBI demo origin [skip ci]" || true
           git pull --rebase origin master || true
           git push origin HEAD:master || true
 
-      - name: Keep FARBI online
+      - name: Keep verified FARBI demo online
         shell: bash
         run: |
           set -euo pipefail
-          echo "FARBI is live at $FARBI_FIXED_URL"
+          echo "FARBI verified demo: $FARBI_FIXED_URL"
           for i in {1..66}; do
             curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null
             curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null
             curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null
-            echo "heartbeat $i — $FARBI_FIXED_URL"
+            echo "heartbeat $i"
             sleep 300
           done

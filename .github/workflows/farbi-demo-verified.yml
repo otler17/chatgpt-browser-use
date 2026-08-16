@@ -1,0 +1,182 @@
+name: FARBI verified full demo
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-demo-verified.yml"
+      - ".github/farbi-demo/**"
+  workflow_dispatch:
+
+concurrency:
+  group: farbi-verified-full-demo
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  farbi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: farbi_user
+          POSTGRES_PASSWORD: farbi_password
+          POSTGRES_DB: farbi_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U farbi_user -d farbi_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      APP_ENV: development
+      SECRET_KEY: farbi-verified-demo-secret-20260816
+      DATABASE_URL: postgresql://farbi_user:farbi_password@127.0.0.1:5432/farbi_db
+      REDIS_URL: redis://127.0.0.1:6379/0
+      PAYMENT_WEBHOOK_SECRET: farbi-verified-demo-webhook
+      OFFLINE_LOCAL_MODE: "true"
+      STORAGE_BACKEND: local
+      LOCAL_UPLOAD_ROOT: instance/local_uploads
+      EMAIL_BACKEND: local
+      LOCAL_EMAIL_OUTBOX: instance/offline_emails
+      PAYMENT_PROVIDER: mock
+      DEMO_PASSWORD: Password123
+      FARBI_PUBLIC_HOST: farbi-demo-otler17.trapdoor.sh
+      FARBI_URL: https://farbi-demo-otler17.trapdoor.sh
+      MAIN_APP_DOMAINS: farbi-demo-otler17.trapdoor.sh,localhost,127.0.0.1
+      PUBLIC_AUTH_ORIGIN: https://farbi-demo-otler17.trapdoor.sh
+      FLASK_SERVER_NAME: farbi-demo-otler17.trapdoor.sh
+
+    steps:
+      - name: Check out deployment bundle
+        uses: actions/checkout@v4
+
+      - name: Restore exact FARBI source
+        shell: bash
+        run: |
+          set -euo pipefail
+          OIDC_JSON=$(curl -fsS \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=farbi-sites-bootstrap")
+          OIDC_TOKEN=$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$OIDC_JSON")
+          FARBI_BUNDLE_KEY=$(curl -fsS \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            https://farbi-marketplace.omar-gassab.chatgpt.site/.well-known/farbi-bundle-key)
+          export FARBI_BUNDLE_KEY
+          cat .github/farbi-bundle/*.enc | openssl enc -d -aes-256-cbc -pbkdf2 \
+            -pass env:FARBI_BUNDLE_KEY -out farbi-project.zip
+          mkdir farbi-project
+          unzip -q farbi-project.zip -d farbi-project
+          test -f farbi-project/application.py
+          cp .github/farbi-demo/seed_demo.py farbi-project/seed_demo.py
+          cp .github/farbi-demo/trapdoor_entry.py farbi-project/trapdoor_entry.py
+          cp .github/farbi-demo/verify_demo.py farbi-project/verify_demo.py
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: farbi-project/requirements/prod.txt
+
+      - name: Install application dependencies
+        working-directory: farbi-project
+        run: python -m pip install -r requirements/prod.txt
+
+      - name: Migrate and seed PostgreSQL
+        working-directory: farbi-project
+        run: |
+          set -euo pipefail
+          python -m flask --app application db upgrade
+          python scripts/seed_integration_data.py
+          python seed_demo.py
+
+      - name: Start FARBI and fixed public tunnel
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://trapdoor.sh/install.sh | sh
+
+          RUNNER_TRACKING_ID="" nohup gunicorn \
+            --chdir farbi-project \
+            --bind 127.0.0.1:8000 \
+            --workers 2 \
+            --threads 4 \
+            --timeout 120 \
+            trapdoor_entry:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
+
+          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-demo-otler17 \
+            > "$RUNNER_TEMP/trapdoor.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/trapdoor.pid"
+
+          for i in {1..90}; do
+            if curl -fsS --max-time 20 "$FARBI_URL/" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_URL/browse" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_URL/login" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_URL/register" >/dev/null; then
+              echo "FARBI public demo is reachable at $FARBI_URL"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "=== trapdoor ==="
+          cat "$RUNNER_TEMP/trapdoor.log" || true
+          echo "=== gunicorn ==="
+          cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
+          exit 1
+
+      - name: Verify pages, PostgreSQL accounts, roles and signup
+        working-directory: farbi-project
+        run: python verify_demo.py
+
+      - name: Publish verified demo manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f farbi-demo-manifest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add farbi-demo-manifest.json
+          git commit -m "Publish verified FARBI demo manifest [skip ci]" || true
+          git pull --rebase origin master || true
+          git push origin HEAD:master || true
+
+      - name: Publish failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "=== trapdoor ==="
+          tail -n 250 "$RUNNER_TEMP/trapdoor.log" 2>/dev/null || true
+          echo "=== gunicorn ==="
+          tail -n 250 "$RUNNER_TEMP/farbi-gunicorn.log" 2>/dev/null || true
+
+      - name: Keep verified FARBI demo online
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "FARBI verified demo: $FARBI_URL"
+          for i in {1..66}; do
+            curl -fsS --max-time 20 "$FARBI_URL/" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_URL/browse" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_URL/login" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_URL/register" >/dev/null
+            echo "heartbeat $i"
+            sleep 300
+          done

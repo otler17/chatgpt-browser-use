@@ -20,32 +20,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('.github/workflows/farbi-live-host.yml')
-          s = p.read_text(encoding='utf-8')
-          needle = '      - name: Adapt auth routes for stable tunnel hosting\n'
-          artifact = '''      - name: Upload restored FARBI source for validation
-        uses: actions/upload-artifact@v4
-        with:
-          name: farbi-restored-source
-          path: farbi-project.zip
-          if-no-files-found: error
-          retention-days: 1
-
-'''
-          if 'name: Upload restored FARBI source for validation' not in s:
-              if needle not in s:
-                  raise SystemExit('auth-route step marker not found')
-              s = s.replace(needle, artifact + needle, 1)
-              p.write_text(s, encoding='utf-8')
-          PY
+          python -c 'from pathlib import Path; p=Path(".github/workflows/farbi-live-host.yml"); s=p.read_text(); needle="      - name: Adapt auth routes for stable tunnel hosting\n"; art="      - name: Upload restored FARBI source for validation\n        uses: actions/upload-artifact@v4\n        with:\n          name: farbi-restored-source\n          path: farbi-project.zip\n          if-no-files-found: error\n          retention-days: 1\n\n"; assert needle in s; p.write_text(s if "name: Upload restored FARBI source for validation" in s else s.replace(needle,art+needle,1))'
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/farbi-live-host.yml
-          if git diff --cached --quiet; then
-            echo "No change needed."
-            exit 0
-          fi
+          if git diff --cached --quiet; then echo "No change needed."; exit 0; fi
           git commit -m "Upload FARBI restored source for validation"
           git push origin HEAD:master

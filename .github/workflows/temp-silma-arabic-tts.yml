@@ -1,0 +1,135 @@
+name: Temporary SILMA Arabic TTS sample
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/temp-silma-arabic-tts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthesize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      HF_HUB_DISABLE_XET: '1'
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install CPU runtime
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install -U pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu \
+            'torch==2.6.0+cpu' 'torchaudio==2.6.0+cpu' 'torchvision==0.21.0+cpu'
+          python -m pip install --no-deps 'silma-tts==1.0.5'
+          python -m pip install \
+            cached_path click 'ema_pytorch>=0.5.2' 'hydra-core>=1.3.0' librosa matplotlib \
+            'numpy==1.26.4' pydub safetensors soundfile tomli torchdiffeq tqdm unidecode \
+            vocos 'x_transformers>=1.31.14' huggingface_hub
+
+      - name: Patch unused optional imports
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PURELIB=$(python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
+          F="$PURELIB/silma_tts/infer/utils_infer.py"
+          python - "$F" <<'PY'
+          import pathlib, sys
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+          s = s.replace('from transformers import pipeline', 'pipeline = None')
+          s = s.replace('from nemo_text_processing.text_normalization.normalize import Normalizer', 'Normalizer = None')
+          s = s.replace('from catt_tashkeel import CATTEncoderOnly', 'CATTEncoderOnly = None')
+          p.write_text(s)
+          PY
+
+      - name: Generate Arabic coffee ad
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          cat > /tmp/run_silma.py <<'PY'
+          import math, pathlib
+          import numpy as np
+          import soundfile as sf
+          from importlib.resources import files
+          from silma_tts.api import SilmaTTS
+
+          text = (
+              'ابدأ يومك بنكهة تستحقها. إمبر روست، قهوة محمصة بعناية، برائحة غنية ولمسات شوكولاتة ناعمة، '
+              'ونهاية متوازنة. من أول رشفة حتى آخرها، تمنحك دفعة دافئة وتركيزاً هادئاً. '
+              'إمبر روست، قهوتك للحظة أفضل كل صباح.'
+          )
+          ref = str(files('silma_tts').joinpath('infer/ref_audio_samples/ar.ref.24k.wav'))
+          ref_text = 'ويدقق النظر في القرآن الكريم وسائر الكتب السماوية ويتبع مسالك الرسل العظام عليهم الصلاة والسلام.'
+
+          model = SilmaTTS(device='cpu', enable_normalizer=False, force_tashkeel=False)
+          wav, sr, _ = model.infer(
+              ref_file=ref,
+              ref_text=ref_text,
+              gen_text=text,
+              nfe_step=16,
+              speed=1.0,
+              seed=20260816,
+              normalize_numbers=False,
+              force_tashkeel=False,
+          )
+          wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+          peak = float(np.max(np.abs(wav))) if wav.size else 0.0
+          if peak > 0.94:
+              wav *= 0.94 / peak
+          sf.write('out/silma_arabic_raw.wav', wav, sr, subtype='PCM_16')
+          pathlib.Path('out/copy_ar.txt').write_text(text, encoding='utf-8')
+          print('sr', sr, 'duration', len(wav)/sr, 'peak_before', peak)
+          PY
+          python /tmp/run_silma.py
+
+      - name: Fit to 15 seconds and quality check
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 out/silma_arabic_raw.wav)
+          python - "$DUR" <<'PY' > /tmp/filter.txt
+          import sys
+          d=float(sys.argv[1])
+          if d > 15.0:
+              tempo=d/15.0
+              print(f'atempo={tempo:.9f}')
+          else:
+              print('apad')
+          PY
+          FILTER=$(cat /tmp/filter.txt)
+          ffmpeg -y -v error -i out/silma_arabic_raw.wav -af "$FILTER" -t 15.000 -ar 24000 -ac 1 -c:a pcm_s16le out/silma_arabic_coffee_ad_15s.wav
+          python - <<'PY'
+          import numpy as np, soundfile as sf
+          from scipy.signal import welch
+          x,sr=sf.read('out/silma_arabic_coffee_ad_15s.wav', dtype='float32')
+          peak=float(np.max(np.abs(x)))
+          f,p=welch(x, sr, nperseg=min(8192,len(x)))
+          total=float(p[(f>=80)&(f<=12000)].sum())
+          hi=float(p[(f>=6000)&(f<=12000)].sum())
+          ratio=hi/total if total else 0.0
+          print('duration', len(x)/sr, 'peak', peak, 'hf_6_12k_ratio', ratio)
+          if peak >= 0.999:
+              raise SystemExit('clipping detected')
+          if ratio > 0.20:
+              raise SystemExit('excessive high-frequency energy detected')
+          PY
+          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/silma_arabic_coffee_ad_15s.wav
+
+      - name: Upload Arabic ad
+        uses: actions/upload-artifact@v4
+        with:
+          name: silma-arabic-coffee-ad
+          path: |
+            out/silma_arabic_coffee_ad_15s.wav
+            out/copy_ar.txt
+          if-no-files-found: error
+          retention-days: 1

@@ -79,6 +79,37 @@ jobs:
           test -f farbi-project/application.py
           test -f farbi-project/migrations/versions/000000000001_baseline_schema.py
 
+      - name: Adapt auth host guard for offline tunnel hosting
+        working-directory: farbi-project
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("application.py")
+          source = path.read_text(encoding="utf-8")
+          needle = """@app.before_request
+def require_platform_host_for_auth():
+    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:
+        return None
+"""
+          replacement = """@app.before_request
+def require_platform_host_for_auth():
+    # The GitHub/Cloudflare demo host runs explicitly in OFFLINE_LOCAL_MODE.
+    # In that mode the stable chatgpt.site front door may proxy with an internal
+    # Host value, so canonical-host redirects would loop back to the same URL.
+    # Keep the strict host guard unchanged for every non-offline deployment.
+    if current_app.config.get('OFFLINE_LOCAL_MODE'):
+        return None
+    if request.endpoint not in SENSITIVE_AUTH_ENDPOINTS:
+        return None
+"""
+          if needle not in source:
+              raise SystemExit("Expected auth host guard was not found; refusing an unsafe blind patch")
+          path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+          PY
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

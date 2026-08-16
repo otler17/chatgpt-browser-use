@@ -1,4 +1,4 @@
-name: Temporary VibeThinker sandbox bundle
+name: Temporary VibeThinker split bundle
 
 on:
   push:
@@ -8,42 +8,75 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  bundle:
+  split:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
-      - name: Fetch official llama.cpp Ubuntu x64 CPU runtime
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p vibethinker_bundle/llama_cpp
-          curl -L --fail --retry 5 --retry-delay 2 \
-            -o /tmp/llama.tar.gz \
-            'https://github.com/ggml-org/llama.cpp/releases/download/b10453/llama-b10453-bin-ubuntu-x64.tar.gz'
-          tar -xzf /tmp/llama.tar.gz -C vibethinker_bundle/llama_cpp
-          CLI=$(find vibethinker_bundle/llama_cpp -type f -name llama-cli | head -n 1)
-          test -n "$CLI"
-          chmod +x "$CLI"
-          LD_LIBRARY_PATH="$(dirname "$CLI"):${LD_LIBRARY_PATH:-}" "$CLI" --version
-          find vibethinker_bundle/llama_cpp -maxdepth 2 -type f -printf '%p %k KB\n' | head -80
-
-      - name: Download VibeThinker-3B Q3_K_M GGUF
-        shell: bash
-        run: |
-          set -euxo pipefail
-          curl -L --fail --retry 5 --retry-delay 3 \
-            -o vibethinker_bundle/VibeThinker-3B.Q3_K_M.gguf \
-            'https://huggingface.co/prithivMLmods/VibeThinker-3B-GGUF/resolve/main/VibeThinker-3B.Q3_K_M.gguf?download=true'
-          ls -lh vibethinker_bundle/VibeThinker-3B.Q3_K_M.gguf
-          sha256sum vibethinker_bundle/VibeThinker-3B.Q3_K_M.gguf | tee vibethinker_bundle/SHA256SUMS.txt
-
-      - name: Upload sandbox bundle
-        uses: actions/upload-artifact@v4
+      - name: Download completed VibeThinker bundle from prior run
+        uses: actions/download-artifact@v4
         with:
           name: vibethinker-3b-q3km-sandbox
-          path: vibethinker_bundle
-          if-no-files-found: error
+          path: source_bundle
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: otler17/chatgpt-browser-use
+          run-id: 31974885558
+
+      - name: Split model below connector 512 MiB limit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          MODEL=$(find source_bundle -type f -name 'VibeThinker-3B.Q3_K_M.gguf' | head -n 1)
+          test -n "$MODEL"
+          mkdir -p split_parts runtime_bundle
+          split -b 400M -d -a 2 "$MODEL" split_parts/VibeThinker-3B.Q3_K_M.gguf.part.
+          cp -a source_bundle/llama_cpp runtime_bundle/
+          cp source_bundle/SHA256SUMS.txt runtime_bundle/
+          ls -lh split_parts
+          du -sh runtime_bundle
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.00
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.01
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.02
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.03
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-runtime
+          path: runtime_bundle
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-00
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.00
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-01
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.01
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-02
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.02
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-03
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.03
           retention-days: 1
           compression-level: 0

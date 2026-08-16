@@ -15,11 +15,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify current tunnel and stable site
+      - name: Check out published origin
+        uses: actions/checkout@v4
+
+      - name: Verify home and auth endpoints
         shell: bash
         run: |
           set -euo pipefail
-          echo "=== current tunnel ==="
-          curl -fsSIL --max-time 30 https://mrna-operations-equation-tale.trycloudflare.com/ | sed -n '1,20p'
-          echo "=== stable site ==="
-          curl -fsSIL --max-time 30 https://farbi-marketplace.omar-gassab.chatgpt.site/ | sed -n '1,20p'
+          ORIGIN=$(python -c 'import json; print(json.load(open("farbi-live-origin.json"))["origin"])')
+          STABLE="https://farbi-marketplace.omar-gassab.chatgpt.site"
+
+          check() {
+            local url="$1"
+            echo "=== $url ==="
+            curl -fsSL \
+              --max-time 30 \
+              --max-redirs 5 \
+              -o /dev/null \
+              -w 'status=%{http_code} redirects=%{num_redirects} final=%{url_effective}\n' \
+              "$url"
+          }
+
+          check "$ORIGIN/"
+          check "$ORIGIN/login"
+          check "$ORIGIN/register"
+          check "$STABLE/"
+          check "$STABLE/login"
+          check "$STABLE/register"

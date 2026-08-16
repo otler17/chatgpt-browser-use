@@ -22,6 +22,12 @@ def with_token(path, token):
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode({ACCESS_PARAM: token}), ""))
 
 
+def wait_for_access_url(page, label):
+    page.wait_for_url(lambda value: f"{ACCESS_PARAM}=" in value, timeout=60000)
+    page.wait_for_load_state("networkidle", timeout=60000)
+    print(f"{label}: browser reached signed URL {page.url}")
+
+
 def assert_protected(page, context, token, protected_path, label):
     # Simulate the user's restrictive/sandboxed browser: remove every cookie
     # immediately before the protected navigation. Authentication must come
@@ -56,12 +62,15 @@ def login_and_check(browser, email, protected_path, role):
     password = page.locator('input[name="password"]')
     password.fill(PASSWORD)
     password.press("Enter")
-    page.wait_for_load_state("networkidle", timeout=60000)
 
+    # The auth POST returns HTTP 200; then the browser itself performs the
+    # signed navigation. This specifically catches the tunnel's 302-swallowing
+    # behavior that caused the user's browser to appear logged out.
+    wait_for_access_url(page, f"{role} credentials")
     token = token_from_url(page.url)
 
-    # Delete all cookies and reload the exact post-login URL. If the browser
-    # depends on Flask's cookie, this reload would immediately become anonymous.
+    # Delete every cookie and reload. If any hidden cookie dependency remains,
+    # this immediately fails.
     context.clear_cookies()
     response = page.reload(wait_until="networkidle", timeout=60000)
     if response is None or response.status != 200 or "/login" in page.url:
@@ -69,12 +78,11 @@ def login_and_check(browser, email, protected_path, role):
 
     assert_protected(page, context, token, protected_path, role)
 
-    # Also verify the one-click role entry point, useful when a sandbox refuses
-    # the normal cookie mechanism completely.
+    # One-click role entry must also use browser-side navigation and survive
+    # cookie deletion.
     context.clear_cookies()
-    response = page.goto(f"{BASE}/demo-access/{role}", wait_until="networkidle", timeout=60000)
-    if response is None or response.status != 200:
-        raise RuntimeError(f"{role}: demo-access entry failed")
+    page.goto(f"{BASE}/demo-access/{role}", wait_until="domcontentloaded", timeout=60000)
+    wait_for_access_url(page, f"{role} one-click")
     magic_token = token_from_url(page.url)
     assert_protected(page, context, magic_token, protected_path, f"{role}-magic")
     context.close()
@@ -94,6 +102,7 @@ def main():
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["chromium_role_logins_e2e"] = "passed"
     manifest["cookieless_chromium_role_logins_e2e"] = "passed"
+    manifest["client_side_auth_navigation_e2e"] = "passed"
     manifest["cookie_dependency"] = "none for demo access"
     manifest["demo_access_param"] = ACCESS_PARAM
     manifest["demo_access_routes"] = {

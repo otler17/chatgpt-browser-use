@@ -1,0 +1,29 @@
+name: FARBI fixed hostname probe
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-fixed-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Probe fixed public routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://farbi-otler17.trapdoor.sh"
+          for ROUTE in / /signin /signup; do
+            echo "=== $BASE$ROUTE ==="
+            curl -sS -D - -o /tmp/body --max-time 20 --max-redirs 0 "$BASE$ROUTE" || true
+            echo "--- body head ---"
+            head -c 800 /tmp/body 2>/dev/null || true
+            echo
+          done

@@ -16,24 +16,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Cancel all superseded host runs
+      - name: Cancel superseded FARBI host runs
         env:
           GH_TOKEN: ${{ github.token }}
-          KEEP_RUN_ID: "31953035700"
+          KEEP_RUN_ID: "31955173503"
         run: |
           set -euo pipefail
-          gh run list \
-            --repo "$GITHUB_REPOSITORY" \
-            --workflow farbi-live-host.yml \
-            --status in_progress \
-            --limit 20 \
-            --json databaseId \
-            --jq '.[].databaseId' > /tmp/runs.txt
+          for STATUS in in_progress queued; do
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow farbi-live-host.yml \
+              --status "$STATUS" \
+              --limit 20 \
+              --json databaseId \
+              --jq '.[].databaseId' || true
+          done | sort -u > /tmp/runs.txt
 
           while read -r RUN_ID; do
             [ -n "$RUN_ID" ] || continue
             if [ "$RUN_ID" = "$KEEP_RUN_ID" ]; then
-              echo "Keeping corrected FARBI host run $RUN_ID."
+              echo "Keeping verification host run $RUN_ID."
               continue
             fi
             echo "Cancelling superseded FARBI host run $RUN_ID."

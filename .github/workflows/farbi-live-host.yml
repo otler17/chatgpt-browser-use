@@ -52,8 +52,9 @@ jobs:
       EMAIL_BACKEND: local
       LOCAL_EMAIL_OUTBOX: instance/offline_emails
       PAYMENT_PROVIDER: mock
-      MAIN_APP_DOMAINS: farbi-marketplace.omar-gassab.chatgpt.site,127.0.0.1,localhost
-      PUBLIC_AUTH_ORIGIN: https://farbi-marketplace.omar-gassab.chatgpt.site
+      MAIN_APP_DOMAINS: farbi-otler17.trapdoor.sh,127.0.0.1,localhost
+      PUBLIC_AUTH_ORIGIN: https://farbi-otler17.trapdoor.sh
+      FARBI_FIXED_URL: https://farbi-otler17.trapdoor.sh
 
     steps:
       - name: Check out runtime bundle
@@ -105,7 +106,7 @@ jobs:
           python -m flask --app application db upgrade
           python scripts/seed_integration_data.py
 
-      - name: Start the uploaded Flask application
+      - name: Start FARBI for local health check
         id: application
         working-directory: farbi-project
         shell: bash
@@ -125,52 +126,89 @@ jobs:
           cat "$RUNNER_TEMP/farbi-gunicorn.log"
           exit 1
 
-      - name: Open the live tunnel
+      - name: Open fixed public tunnel
         id: tunnel
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsSL \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
-            -o "$RUNNER_TEMP/cloudflared"
-          chmod +x "$RUNNER_TEMP/cloudflared"
-          RUNNER_TRACKING_ID="" nohup "$RUNNER_TEMP/cloudflared" tunnel \
-            --url http://127.0.0.1:8000 \
-            --no-autoupdate > "$RUNNER_TEMP/cloudflared.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/cloudflared.pid"
-          for i in {1..90}; do
-            URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' "$RUNNER_TEMP/cloudflared.log" | head -1 || true)
-            if [ -n "$URL" ]; then
-              printf '%s\n' "$URL" | tee "$RUNNER_TEMP/farbi-live-url.txt"
-              echo "FARBI_TUNNEL_URL=$URL" >> "$GITHUB_ENV"
-              TUNNEL_HOST="${URL#https://}"
-              kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
-              sleep 2
-              FLASK_SERVER_NAME="$TUNNEL_HOST" \
-              MAIN_APP_DOMAINS="farbi-marketplace.omar-gassab.chatgpt.site,127.0.0.1,localhost,$TUNNEL_HOST" \
-              RUNNER_TRACKING_ID="" nohup gunicorn \
-                --chdir farbi-project \
-                --bind 127.0.0.1:8000 \
-                --workers 2 \
-                --threads 4 \
-                --timeout 120 \
-                application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
-              echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
-              for j in {1..40}; do
-                curl -fsS "$URL/" >/dev/null && \
-                curl -fsS "$URL/signin" >/dev/null && \
-                curl -fsS "$URL/signup" >/dev/null && exit 0
-                sleep 1
-              done
-              cat "$RUNNER_TEMP/farbi-gunicorn.log"
-              exit 1
+          curl -fsSL https://trapdoor.sh/install.sh | sh
+          command -v trapdoor
+
+          kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
+          sleep 2
+          FLASK_SERVER_NAME="farbi-otler17.trapdoor.sh" \
+          MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,127.0.0.1,localhost" \
+          PUBLIC_AUTH_ORIGIN="$FARBI_FIXED_URL" \
+          RUNNER_TRACKING_ID="" nohup gunicorn \
+            --chdir farbi-project \
+            --bind 127.0.0.1:8000 \
+            --workers 2 \
+            --threads 4 \
+            --timeout 120 \
+            application:app > "$RUNNER_TEMP/farbi-gunicorn.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/farbi-gunicorn.pid"
+
+          RUNNER_TRACKING_ID="" nohup trapdoor 8000 farbi-otler17 \
+            > "$RUNNER_TEMP/trapdoor.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/trapdoor.pid"
+
+          printf '%s\n' "$FARBI_FIXED_URL" | tee "$RUNNER_TEMP/farbi-live-url.txt"
+          echo "FARBI_TUNNEL_URL=$FARBI_FIXED_URL" >> "$GITHUB_ENV"
+
+          for i in {1..80}; do
+            if curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null && \
+               curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null; then
+              exit 0
             fi
-            sleep 1
+            sleep 2
           done
-          cat "$RUNNER_TEMP/cloudflared.log"
+          cat "$RUNNER_TEMP/trapdoor.log" || true
+          cat "$RUNNER_TEMP/farbi-gunicorn.log" || true
           exit 1
 
-      - name: Upload the live URL
+      - name: Verify signup and sign in against PostgreSQL
+        id: auth_e2e
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGIN="$FARBI_FIXED_URL"
+          USERNAME="hoste2e${GITHUB_RUN_ID}"
+          EMAIL="hoste2e-${GITHUB_RUN_ID}@example.com"
+          PASSWORD="FarbiHostTest-${GITHUB_RUN_ID}!"
+
+          curl -fsS -c "$RUNNER_TEMP/register.cookies" "$ORIGIN/signup" -o "$RUNNER_TEMP/signup.html"
+          TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signup.html" | head -1 | sed 's/.*value="//;s/"$//')
+          test -n "$TOKEN"
+
+          REGISTER_FINAL=$(curl -fsS -L -e "$ORIGIN/signup" \
+            -b "$RUNNER_TEMP/register.cookies" -c "$RUNNER_TEMP/register.cookies" \
+            -o "$RUNNER_TEMP/register-result.html" -w '%{url_effective}' \
+            --data-urlencode "csrf_token=$TOKEN" \
+            --data-urlencode "username=$USERNAME" \
+            --data-urlencode "email=$EMAIL" \
+            --data-urlencode "password=$PASSWORD" \
+            --data-urlencode "confirm_password=$PASSWORD" \
+            --data-urlencode "submit=Register" \
+            "$ORIGIN/signup")
+          test "$REGISTER_FINAL" = "$ORIGIN/"
+
+          curl -fsS -c "$RUNNER_TEMP/login.cookies" "$ORIGIN/signin" -o "$RUNNER_TEMP/signin.html"
+          TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' "$RUNNER_TEMP/signin.html" | head -1 | sed 's/.*value="//;s/"$//')
+          test -n "$TOKEN"
+
+          LOGIN_FINAL=$(curl -fsS -L -e "$ORIGIN/signin" \
+            -b "$RUNNER_TEMP/login.cookies" -c "$RUNNER_TEMP/login.cookies" \
+            -o "$RUNNER_TEMP/login-result.html" -w '%{url_effective}' \
+            --data-urlencode "csrf_token=$TOKEN" \
+            --data-urlencode "identifier=$EMAIL" \
+            --data-urlencode "password=$PASSWORD" \
+            --data-urlencode "submit=Login" \
+            "$ORIGIN/signin")
+          test "$LOGIN_FINAL" = "$ORIGIN/"
+          echo "FARBI signup and sign in E2E passed."
+
+      - name: Upload the fixed live URL
         uses: actions/upload-artifact@v4
         with:
           name: farbi-live-url
@@ -178,7 +216,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Publish the live URL for Sites
+      - name: Publish current FARBI origin
         id: publish
         shell: bash
         run: |
@@ -189,11 +227,12 @@ jobs:
           from datetime import datetime, timezone
 
           payload = {
-              "origin": os.environ["FARBI_TUNNEL_URL"],
+              "origin": os.environ["FARBI_FIXED_URL"],
               "run_id": os.environ["GITHUB_RUN_ID"],
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "commit": os.environ["GITHUB_SHA"],
               "published_at": datetime.now(timezone.utc).isoformat(),
+              "auth_routes": {"signin": "/signin", "signup": "/signup"},
           }
           with open("farbi-live-origin.json", "w", encoding="utf-8") as handle:
               json.dump(payload, handle, indent=2)
@@ -202,7 +241,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add farbi-live-origin.json
-          git commit -m "Publish FARBI live origin [skip ci]"
+          git commit -m "Publish FARBI fixed live origin [skip ci]"
           git push origin HEAD:master
 
       - name: Publish launch status
@@ -214,6 +253,7 @@ jobs:
           DATABASE_OUTCOME: ${{ steps.database.outcome }}
           APPLICATION_OUTCOME: ${{ steps.application.outcome }}
           TUNNEL_OUTCOME: ${{ steps.tunnel.outcome }}
+          AUTH_E2E_OUTCOME: ${{ steps.auth_e2e.outcome }}
           PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
         run: |
           set -u
@@ -228,16 +268,18 @@ jobs:
               "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
               "commit": os.environ["GITHUB_SHA"],
               "published_at": datetime.now(timezone.utc).isoformat(),
+              "public_url": os.environ.get("FARBI_FIXED_URL"),
               "steps": {
                   "restore": os.environ.get("RESTORE_OUTCOME", "unknown"),
                   "dependencies": os.environ.get("DEPENDENCIES_OUTCOME", "unknown"),
                   "database": os.environ.get("DATABASE_OUTCOME", "unknown"),
                   "application": os.environ.get("APPLICATION_OUTCOME", "unknown"),
                   "tunnel": os.environ.get("TUNNEL_OUTCOME", "unknown"),
+                  "auth_e2e": os.environ.get("AUTH_E2E_OUTCOME", "unknown"),
                   "publish": os.environ.get("PUBLISH_OUTCOME", "unknown"),
               },
           }
-          for name in ("farbi-gunicorn.log", "cloudflared.log"):
+          for name in ("farbi-gunicorn.log", "trapdoor.log"):
               path = Path(os.environ["RUNNER_TEMP"]) / name
               if path.exists():
                   payload[name] = path.read_text(encoding="utf-8", errors="replace")[-8000:]
@@ -256,11 +298,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "FARBI is live at $FARBI_TUNNEL_URL"
+          echo "FARBI is live at $FARBI_FIXED_URL"
           for i in {1..66}; do
-            curl -fsS "$FARBI_TUNNEL_URL/" >/dev/null
-            curl -fsS "$FARBI_TUNNEL_URL/signin" >/dev/null
-            curl -fsS "$FARBI_TUNNEL_URL/signup" >/dev/null
-            echo "heartbeat $i — $FARBI_TUNNEL_URL"
+            curl -fsS --max-time 20 "$FARBI_FIXED_URL/" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_FIXED_URL/signin" >/dev/null
+            curl -fsS --max-time 20 "$FARBI_FIXED_URL/signup" >/dev/null
+            echo "heartbeat $i — $FARBI_FIXED_URL"
             sleep 300
           done

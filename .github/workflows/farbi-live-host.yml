@@ -52,7 +52,7 @@ jobs:
       EMAIL_BACKEND: local
       LOCAL_EMAIL_OUTBOX: instance/offline_emails
       PAYMENT_PROVIDER: mock
-      MAIN_APP_DOMAINS: farbi-otler17.trapdoor.sh,127.0.0.1,localhost
+      MAIN_APP_DOMAINS: farbi-otler17.trapdoor.sh,localhost,127.0.0.1
       PUBLIC_AUTH_ORIGIN: https://farbi-otler17.trapdoor.sh
       FARBI_FIXED_URL: https://farbi-otler17.trapdoor.sh
 
@@ -136,8 +136,8 @@ jobs:
 
           kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
           sleep 2
-          FLASK_SERVER_NAME="" \
-          MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,127.0.0.1,localhost" \
+          FLASK_SERVER_NAME="localhost:8000" \
+          MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,localhost,127.0.0.1" \
           PUBLIC_AUTH_ORIGIN="$FARBI_FIXED_URL" \
           RUNNER_TRACKING_ID="" nohup gunicorn \
             --chdir farbi-project \

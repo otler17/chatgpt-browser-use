@@ -1,0 +1,25 @@
+name: FARBI live endpoint verification
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-live-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify current tunnel and stable site
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== current tunnel ==="
+          curl -fsSIL --max-time 30 https://mrna-operations-equation-tale.trycloudflare.com/ | sed -n '1,20p'
+          echo "=== stable site ==="
+          curl -fsSIL --max-time 30 https://farbi-marketplace.omar-gassab.chatgpt.site/ | sed -n '1,20p'

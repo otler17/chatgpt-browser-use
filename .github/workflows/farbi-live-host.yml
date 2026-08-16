@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -147,6 +147,32 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Publish the live URL for Sites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          imort os
+          from datetime import datetime, timezone
+
+          payload = {
+              "origin": os.environ["FARBI_TUNNEL_URL"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "commit": os.environ["GITHUB_SHA"],
+              "published_at": datetime.now(timezone.utc).isoformat(),
+          }
+          with open("farbi-live-origin.json", "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+              handle.write("\n")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add farbi-live-origin.json
+          git commit -m "Publish FARBI live origin [skip ci]"
+          git push origin HEAD:master
+
       - name: Keep FARBI online
         shell: bash
         run: |
@@ -154,6 +180,6 @@ jobs:
           echo "FARBI is live at $FARBI_TUNNEL_URL"
           for i in {1..66}; do
             curl -fsS "$FARBI_TUNNEL_URL/" >/dev/null
-            echo "heartbeat $i — $FARBI_TUNNEL_URL"
+            echo "heartbat $i — $FARBI_TUNNEL_URL"
             sleep 300
           done

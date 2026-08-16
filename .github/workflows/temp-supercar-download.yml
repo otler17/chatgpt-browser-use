@@ -1,4 +1,4 @@
-name: Temporary F5-TTS split local bundle
+name: Temporary F5-TTS dependency patch
 
 on:
   push:
@@ -10,73 +10,26 @@ permissions:
   contents: read
 
 jobs:
-  bundle:
+  deps:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-
-      - name: Build F5-TTS runtime and split checkpoint
+      - name: Download dependency patch wheels
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p f5_runtime/wheels f5_runtime/models/f5 f5_runtime/models/vocos f5_parts
-          git clone --depth 1 https://github.com/SWivid/F5-TTS.git f5_runtime/F5-TTS
-          python -m pip install -U pip huggingface_hub
-          python - <<'PY'
-          from huggingface_hub import hf_hub_download, snapshot_download
-          hf_hub_download(repo_id='SWivid/F5-TTS', filename='F5TTS_v1_Base/model_1250000.safetensors', local_dir='f5_runtime/models/f5')
-          hf_hub_download(repo_id='SWivid/F5-TTS', filename='F5TTS_v1_Base/vocab.txt', local_dir='f5_runtime/models/f5')
-          snapshot_download(repo_id='charactr/vocos-mel-24khz', local_dir='f5_runtime/models/vocos', allow_patterns=['config.yaml', 'pytorch_model.bin'])
-          PY
-          python -m pip download --dest f5_runtime/wheels --only-binary=:all: --no-deps \
-            'transformers' 'tokenizers' 'vocos' 'x-transformers>=1.31.14' \
-            'torchdiffeq' 'pypinyin' 'rjieba' 'ema-pytorch>=0.5.2' \
-            'einx' 'rotary-embedding-torch' 'beartype' 'vector-quantize-pytorch' \
-            'local-attention' 'gateloop-transformer'
-          MODEL='f5_runtime/models/f5/F5TTS_v1_Base/model_1250000.safetensors'
-          split -b 280M -d -a 2 "$MODEL" f5_parts/model.part-
-          rm "$MODEL"
-          ls -lh f5_parts
-          du -sh f5_runtime
-
-      - name: Upload F5 runtime
+          mkdir -p f5_dep_patch
+          python -m pip install -U pip
+          python -m pip download --dest f5_dep_patch --only-binary=:all: --no-deps \
+            'tokenizers==0.23.0' 'torch-einops-utils>=0.1.12' 'encodec==0.1.1' \
+            'frozendict' 'hyper-connections>=0.1.8' 'safetensors>=0.8.0'
+          ls -lh f5_dep_patch
+      - name: Upload dependency patch
         uses: actions/upload-artifact@v4
         with:
-          name: f5-runtime
-          path: f5_runtime
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Upload model part 00
-        uses: actions/upload-artifact@v4
-        with:
-          name: f5-model-00
-          path: f5_parts/model.part-00
-          retention-days: 1
-      - name: Upload model part 01
-        uses: actions/upload-artifact@v4
-        with:
-          name: f5-model-01
-          path: f5_parts/model.part-01
-          retention-days: 1
-      - name: Upload model part 02
-        uses: actions/upload-artifact@v4
-        with:
-          name: f5-model-02
-          path: f5_parts/model.part-02
-          retention-days: 1
-      - name: Upload model part 03
-        uses: actions/upload-artifact@v4
-        with:
-          name: f5-model-03
-          path: f5_parts/model.part-03
-          retention-days: 1
-      - name: Upload model part 04
-        uses: actions/upload-artifact@v4
-        with:
-          name: f5-model-04
-          path: f5_parts/model.part-04
+          name: f5-dep-patch
+          path: f5_dep_patch
           retention-days: 1

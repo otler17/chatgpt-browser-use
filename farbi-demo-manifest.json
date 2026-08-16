@@ -1,14 +1,14 @@
 {
-  "origin": "https://farbi-demo-otler17-v4.trapdoor.sh",
-  "run_id": "31958846090",
-  "published_at": "2026-08-16T16:33:28.727806+00:00",
+  "origin": "https://farbi-demo-otler17-v5.trapdoor.sh",
+  "run_id": "31961170464",
+  "published_at": "2026-08-16T17:19:49.982446+00:00",
   "database": "PostgreSQL 16",
   "redis": "Redis 7",
   "auth_routes": {
     "signin": "/login",
     "signup": "/register"
   },
-  "session_cookie": "farbi_demo_session_v4",
+  "cookie_dependency": "none for demo access",
   "demo_password": "Password123",
   "demo_accounts": {
     "customer": {
@@ -50,6 +50,9 @@
     "/cart",
     "/login",
     "/register",
+    "/demo-access/customer",
+    "/demo-access/designer",
+    "/demo-access/admin",
     "/profile/customer_seed",
     "/profile/designer_seed",
     "/profile/edit",
@@ -63,9 +66,17 @@
     "/design/<all six demo ids>",
     "/uploads/images/design_previews/demo_planter_thumb.jpg"
   ],
-  "stale_cookie_login_e2e": "passed",
+  "client_side_auth_handoff_e2e": "passed",
+  "http_cookieless_role_access_e2e": "passed",
   "signup_e2e": "passed",
   "role_logins_e2e": "passed",
   "chromium_role_logins_e2e": "passed",
-  "browser_verified_cookie": "farbi_demo_session_v4"
+  "cookieless_chromium_role_logins_e2e": "passed",
+  "client_side_auth_navigation_e2e": "passed",
+  "demo_access_param": "farbi_access",
+  "demo_access_routes": {
+    "customer": "/demo-access/customer",
+    "designer": "/demo-access/designer",
+    "admin": "/demo-access/admin"
+  }
 }

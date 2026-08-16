@@ -25,6 +25,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
           python -m pip install -U pip
           python -m pip install --index-url https://download.pytorch.org/whl/cpu \
             'torch==2.6.0+cpu' 'torchaudio==2.6.0+cpu' 'torchvision==0.21.0+cpu'
@@ -63,9 +65,8 @@ jobs:
           from silma_tts.api import SilmaTTS
 
           text = (
-              'ابدأ يومك بنكهة تستحقها. إمبر روست، قهوة محمصة بعناية، برائحة غنية ولمسات شوكولاتة ناعمة، '
-              'ونهاية متوازنة. من أول رشفة حتى آخرها، تمنحك دفعة دافئة وتركيزاً هادئاً. '
-              'إمبر روست، قهوتك للحظة أفضل كل صباح.'
+              'ابدأ يومك بنكهة تستحقها. إمبر روست، قهوة محمصة بعناية، برائحة غنية ولمسات شوكولاتة ناعمة ونهاية متوازنة. '
+              'كل رشفة تمنحك دفعة دافئة وتركيزاً هادئاً. إمبر روست، صباحك يبدأ هنا.'
           )
           ref = str(files('silma_tts').joinpath('infer/ref_audio_samples/ar.ref.24k.wav'))
           ref_text = 'ويدقق النظر في القرآن الكريم وسائر الكتب السماوية ويتبع مسالك الرسل العظام عليهم الصلاة والسلام.'
@@ -125,13 +126,15 @@ jobs:
           ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/silma_arabic_coffee_ad_15s.wav
 
       - name: Upload Arabic ad
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: silma-arabic-coffee-ad
           path: |
             out/silma_arabic_coffee_ad_15s.wav
+            out/silma_arabic_raw.wav
             out/copy_ar.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 1
 
-# trigger
+# trigger 2

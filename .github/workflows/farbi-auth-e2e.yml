@@ -1,0 +1,57 @@
+name: FARBI authentication end-to-end check
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/farbi-auth-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Register and sign in against current FARBI backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGIN=$(python -c 'import json; print(json.load(open("farbi-live-origin.json"))["origin"])')
+          USERNAME="e2e${GITHUB_RUN_ID}"
+          EMAIL="e2e-${GITHUB_RUN_ID}@example.com"
+          PASSWORD="FarbiTest-${GITHUB_RUN_ID}!"
+
+          curl -fsS -c /tmp/register.cookies "$ORIGIN/signup" -o /tmp/signup.html
+          TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' /tmp/signup.html | head -1 | sed 's/.*value="//;s/"$//')
+          test -n "$TOKEN"
+
+          REGISTER_FINAL=$(curl -fsS -L -b /tmp/register.cookies -c /tmp/register.cookies \
+            -o /tmp/register-result.html -w '%{url_effective}' \
+            --data-urlencode "csrf_token=$TOKEN" \
+            --data-urlencode "username=$USERNAME" \
+            --data-urlencode "email=$EMAIL" \
+            --data-urlencode "password=$PASSWORD" \
+            --data-urlencode "confirm_password=$PASSWORD" \
+            --data-urlencode "submit=Register" \
+            "$ORIGIN/signup")
+          echo "registration final URL: $REGISTER_FINAL"
+          test "$REGISTER_FINAL" = "$ORIGIN/"
+
+          curl -fsS -c /tmp/login.cookies "$ORIGIN/signin" -o /tmp/signin.html
+          TOKEN=$(grep -o 'name="csrf_token" value="[^"]*"' /tmp/signin.html | head -1 | sed 's/.*value="//;s/"$//')
+          test -n "$TOKEN"
+
+          LOGIN_FINAL=$(curl -fsS -L -b /tmp/login.cookies -c /tmp/login.cookies \
+            -o /tmp/login-result.html -w '%{url_effective}' \
+            --data-urlencode "csrf_token=$TOKEN" \
+            --data-urlencode "identifier=$EMAIL" \
+            --data-urlencode "password=$PASSWORD" \
+            --data-urlencode "submit=Login" \
+            "$ORIGIN/signin")
+          echo "login final URL: $LOGIN_FINAL"
+          test "$LOGIN_FINAL" = "$ORIGIN/"

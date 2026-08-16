@@ -136,7 +136,7 @@ jobs:
 
           kill "$(cat "$RUNNER_TEMP/farbi-gunicorn.pid")" || true
           sleep 2
-          FLASK_SERVER_NAME="farbi-otler17.trapdoor.sh" \
+          FLASK_SERVER_NAME="" \
           MAIN_APP_DOMAINS="farbi-otler17.trapdoor.sh,127.0.0.1,localhost" \
           PUBLIC_AUTH_ORIGIN="$FARBI_FIXED_URL" \
           RUNNER_TRACKING_ID="" nohup gunicorn \

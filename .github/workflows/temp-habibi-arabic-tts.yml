@@ -8,12 +8,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   synthesize:
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 32
     env:
       HF_HUB_DISABLE_XET: '1'
     steps:
@@ -46,14 +50,18 @@ jobs:
           p.write_text(s.replace(old, new, 1))
           PY
 
-      - name: Generate Tunisia narration with 32-step solver
+      - name: Generate part ${{ matrix.part }} at 32 steps
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p out
-          TEXT='أول مرة أزور تونس، وكنت أظنها مجرد شواطئ. بعد ساعة ضعت في المدينة العتيقة، ولم أرد أن أخرج. أول قضمة بريك؟ انتهت مقاومتي. ثم سيدي بوسعيد: أبيض، أزرق، والبحر كأنه لوحة. في قرطاج، التاريخ تحت قدمي. وفي الجم، مدرج روماني جعلني أشعر أنني داخل فيلم. بعدها اتجهت جنوباً: واحات توزر، شط الجريد، بيوت مطماطة، ثم صحراء دوز عند الغروب. وفي الليل، صمت الصحراء كان أقوى من أي موسيقى. ختمت الرحلة في جربة، بين الأزقة والبحر والكسكسي. جئت أبحث عن عطلة، وغادرت بسؤال واحد: لماذا لم آتِ من قبل؟ وأنت، أين تبدأ؟'
+          if [ '${{ matrix.part }}' = '1' ]; then
+            TEXT='أول مرة أزور تونس، وكنت أظنها مجرد شواطئ. بعد ساعة ضعت في المدينة العتيقة، ولم أرد أن أخرج. أول قضمة بريك؟ انتهت مقاومتي. ثم سيدي بوسعيد: أبيض، أزرق، والبحر كأنه لوحة. في قرطاج، التاريخ تحت قدمي. وفي الجم، مدرج روماني جعلني أشعر أنني داخل فيلم.'
+          else
+            TEXT='بعدها اتجهت جنوباً: واحات توزر، شط الجريد، بيوت مطماطة، ثم صحراء دوز عند الغروب. وفي الليل، صمت الصحراء كان أقوى من أي موسيقى. ختمت الرحلة في جربة، بين الأزقة والبحر والكسكسي. جئت أبحث عن عطلة، وغادرت بسؤال واحد: لماذا لم آتِ من قبل؟ وأنت، أين تبدأ؟'
+          fi
           REF='كان اللعيب حاضرًا في العديد من الأنشطة والفعاليات المرتبطة بكأس العالم، مما سمح للجماهير بالتفاعل معه والتقاط الصور التذكارية.'
-          printf '%s\n' "$TEXT" > out/narration_ar.txt
+          printf '%s\n' "$TEXT" > out/text.txt
           habibi-tts_infer-cli \
             --model Specialized \
             --dialect MSA \
@@ -66,54 +74,76 @@ jobs:
             --speed 1.0 \
             --device cpu \
             --output_dir out \
-            --output_file tunisia_raw.wav
-          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/tunisia_raw.wav
-
-      - name: Fit narration to 32 seconds and QC
-        shell: bash
-        run: |
-          set -euxo pipefail
-          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 out/tunisia_raw.wav)
+            --output_file raw.wav
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 out/raw.wav)
           python - "$DUR" <<'PY' > /tmp/filter.txt
           import sys
-          d=float(sys.argv[1]); target=32.0
-          ratio=d/target
-          filters=[]
-          while ratio > 2.0:
-              filters.append('atempo=2.0'); ratio/=2.0
-          while ratio < 0.5:
-              filters.append('atempo=0.5'); ratio/=0.5
+          d=float(sys.argv[1]); target=16.0
+          ratio=d/target; filters=[]
+          while ratio > 2.0: filters.append('atempo=2.0'); ratio/=2.0
+          while ratio < 0.5: filters.append('atempo=0.5'); ratio/=0.5
           filters.append(f'atempo={ratio:.9f}')
           print(','.join(filters))
           PY
-          FILTER=$(cat /tmp/filter.txt)
-          ffmpeg -y -v error -i out/tunisia_raw.wav -af "$FILTER" -t 32.000 -ar 24000 -ac 1 -c:a pcm_s16le out/tunisia_voice_32s.wav
+          ffmpeg -y -v error -i out/raw.wav -af "$(cat /tmp/filter.txt)" -t 16.000 -ar 24000 -ac 1 -c:a pcm_s16le out/part.wav
           python - <<'PY'
           import numpy as np, soundfile as sf
           from scipy.signal import welch
-          p='out/tunisia_voice_32s.wav'
-          x,sr=sf.read(p, dtype='float32')
-          peak=float(np.max(np.abs(x))) if len(x) else 0.0
-          sat=int(np.sum(np.abs(x)>=0.9999))
-          f,P=welch(x, sr, nperseg=min(8192,len(x)))
-          mask=(f>=80)&(f<=12000); hi=(f>=6000)&(f<=12000)
-          total=float(P[mask].sum()); ratio=float(P[hi].sum()/total) if total else 0.0
-          print('duration',len(x)/sr,'peak',peak,'saturated_samples',sat,'hf_6_12k_ratio',ratio)
-          if abs(len(x)/sr-32.0) > 1/sr: raise SystemExit('duration mismatch')
-          if peak >= 0.985 or sat: raise SystemExit('clipping/headroom failure')
-          if ratio > 0.20: raise SystemExit('excess high-frequency energy')
+          x,sr=sf.read('out/part.wav',dtype='float32')
+          peak=float(np.max(np.abs(x))); sat=int(np.sum(np.abs(x)>=0.9999))
+          f,P=welch(x,sr,nperseg=min(8192,len(x))); m=(f>=80)&(f<=12000); h=(f>=6000)&(f<=12000)
+          r=float(P[h].sum()/P[m].sum())
+          print('duration',len(x)/sr,'peak',peak,'sat',sat,'hf',r)
+          if abs(len(x)/sr-16)>1/sr or peak>=0.985 or sat or r>0.20: raise SystemExit('QC failure')
           PY
 
-      - name: Upload Tunisia voice
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: habibi-tunisia-reel-voice
+          name: habibi-part-${{ matrix.part }}
           path: |
-            out/tunisia_voice_32s.wav
-            out/tunisia_raw.wav
-            out/narration_ar.txt
-          if-no-files-found: warn
+            out/part.wav
+            out/text.txt
           retention-days: 1
 
-# tunisia reel voice
+  assemble:
+    needs: synthesize
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: habibi-part-1
+          path: parts/1
+      - uses: actions/download-artifact@v4
+        with:
+          name: habibi-part-2
+          path: parts/2
+      - name: Assemble, QC, and commit known output path
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg python3-numpy python3-scipy python3-soundfile
+          mkdir -p generated
+          printf "file '%s'\nfile '%s'\n" "$PWD/parts/1/part.wav" "$PWD/parts/2/part.wav" > /tmp/list.txt
+          ffmpeg -y -v error -f concat -safe 0 -i /tmp/list.txt -ar 24000 -ac 1 -c:a pcm_s16le generated/tunisia_habibi_voice_32s.wav
+          cat parts/1/text.txt parts/2/text.txt > generated/tunisia_habibi_narration_ar.txt
+          python3 - <<'PY'
+          import numpy as np, soundfile as sf
+          from scipy.signal import welch
+          p='generated/tunisia_habibi_voice_32s.wav'
+          x,sr=sf.read(p,dtype='float32')
+          peak=float(np.max(np.abs(x))); sat=int(np.sum(np.abs(x)>=0.9999))
+          f,P=welch(x,sr,nperseg=min(8192,len(x))); m=(f>=80)&(f<=12000); h=(f>=6000)&(f<=12000)
+          r=float(P[h].sum()/P[m].sum())
+          print('FINAL duration',len(x)/sr,'peak',peak,'sat',sat,'hf',r)
+          if abs(len(x)/sr-32)>1/sr or peak>=0.985 or sat or r>0.20: raise SystemExit('final QC failure')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add generated/tunisia_habibi_voice_32s.wav generated/tunisia_habibi_narration_ar.txt
+          git commit -m 'Add Habibi Tunisia reel narration' || exit 0
+          git push
+
+# parallel Tunisia reel voice

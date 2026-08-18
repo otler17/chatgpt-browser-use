@@ -1,4 +1,4 @@
-name: Temporary Habibi Arabic TTS test
+name: Temporary Habibi Tunisia Reel Voice
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 jobs:
   synthesize:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     env:
       HF_HUB_DISABLE_XET: '1'
     steps:
@@ -39,29 +39,21 @@ jobs:
           python - <<'PY'
           import pathlib, sysconfig
           p = pathlib.Path(sysconfig.get_paths()['purelib']) / 'habibi_tts' / 'infer' / 'infer_cli.py'
-          print('patch_target', p)
-          if not p.is_file():
-              raise SystemExit(f'CLI source not found: {p}')
           s = p.read_text()
           old = 'final_wave = np.concatenate(generated_audio_segments)'
           new = '''final_wave = np.concatenate(generated_audio_segments)\n        peak = float(np.max(np.abs(final_wave))) if final_wave.size else 0.0\n        print(f"pre_export_float_peak={peak:.9f}")\n        if peak > 0.94:\n            final_wave = final_wave * (0.94 / peak)\n            print(f"scaled_float_peak={float(np.max(np.abs(final_wave))):.9f}")'''
-          if old not in s:
-              raise SystemExit('export hook not found')
+          if old not in s: raise SystemExit('export hook not found')
           p.write_text(s.replace(old, new, 1))
-          check = p.read_text()
-          if 'pre_export_float_peak=' not in check:
-              raise SystemExit('patch verification failed')
-          print('patch_ok')
           PY
 
-      - name: Generate MSA coffee ad with 32-step solver
+      - name: Generate Tunisia narration with 32-step solver
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p out
-          TEXT='ابدأ صباحك بقهوة تستحق اللحظة. إمبر روست، حبوب مختارة ومحمصة بعناية، برائحة غنية ونفحات شوكولاتة ناعمة ومذاق متوازن. نكهة ترافقك من أول رشفة حتى آخرها. كل رشفة تمنحك دفئاً وتركيزاً هادئاً. إمبر روست، بداية أجمل ليومك.'
+          TEXT='أول مرة أزور تونس، وكنت أظنها مجرد شواطئ. بعد ساعة ضعت في المدينة العتيقة، ولم أرد أن أخرج. أول قضمة بريك؟ انتهت مقاومتي. ثم سيدي بوسعيد: أبيض، أزرق، والبحر كأنه لوحة. في قرطاج، التاريخ تحت قدمي. وفي الجم، مدرج روماني جعلني أشعر أنني داخل فيلم. بعدها اتجهت جنوباً: واحات توزر، شط الجريد، بيوت مطماطة، ثم صحراء دوز عند الغروب. وفي الليل، صمت الصحراء كان أقوى من أي موسيقى. ختمت الرحلة في جربة، بين الأزقة والبحر والكسكسي. جئت أبحث عن عطلة، وغادرت بسؤال واحد: لماذا لم آتِ من قبل؟ وأنت، أين تبدأ؟'
           REF='كان اللعيب حاضرًا في العديد من الأنشطة والفعاليات المرتبطة بكأس العالم، مما سمح للجماهير بالتفاعل معه والتقاط الصور التذكارية.'
-          printf '%s\n' "$TEXT" > out/copy_ar.txt
+          printf '%s\n' "$TEXT" > out/narration_ar.txt
           habibi-tts_infer-cli \
             --model Specialized \
             --dialect MSA \
@@ -74,58 +66,54 @@ jobs:
             --speed 1.0 \
             --device cpu \
             --output_dir out \
-            --output_file habibi_msa_raw.wav
-          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/habibi_msa_raw.wav
+            --output_file tunisia_raw.wav
+          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/tunisia_raw.wav
 
-      - name: Fit to exactly 15 seconds and QC
+      - name: Fit narration to 32 seconds and QC
         shell: bash
         run: |
           set -euxo pipefail
-          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 out/habibi_msa_raw.wav)
+          DUR=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 out/tunisia_raw.wav)
           python - "$DUR" <<'PY' > /tmp/filter.txt
           import sys
-          d=float(sys.argv[1])
-          if d > 15.0:
-              ratio=d/15.0
-              filters=[]
-              while ratio > 2.0:
-                  filters.append('atempo=2.0'); ratio/=2.0
-              filters.append(f'atempo={ratio:.9f}')
-              print(','.join(filters))
-          else:
-              print('apad')
+          d=float(sys.argv[1]); target=32.0
+          ratio=d/target
+          filters=[]
+          while ratio > 2.0:
+              filters.append('atempo=2.0'); ratio/=2.0
+          while ratio < 0.5:
+              filters.append('atempo=0.5'); ratio/=0.5
+          filters.append(f'atempo={ratio:.9f}')
+          print(','.join(filters))
           PY
           FILTER=$(cat /tmp/filter.txt)
-          ffmpeg -y -v error -i out/habibi_msa_raw.wav -af "$FILTER" -t 15.000 -ar 24000 -ac 1 -c:a pcm_s16le out/habibi_msa_coffee_ad_15s.wav
+          ffmpeg -y -v error -i out/tunisia_raw.wav -af "$FILTER" -t 32.000 -ar 24000 -ac 1 -c:a pcm_s16le out/tunisia_voice_32s.wav
           python - <<'PY'
           import numpy as np, soundfile as sf
           from scipy.signal import welch
-          p='out/habibi_msa_coffee_ad_15s.wav'
+          p='out/tunisia_voice_32s.wav'
           x,sr=sf.read(p, dtype='float32')
           peak=float(np.max(np.abs(x))) if len(x) else 0.0
           sat=int(np.sum(np.abs(x)>=0.9999))
           f,P=welch(x, sr, nperseg=min(8192,len(x)))
-          mask=(f>=80)&(f<=12000)
-          hi=(f>=6000)&(f<=12000)
-          total=float(P[mask].sum())
-          ratio=float(P[hi].sum()/total) if total else 0.0
+          mask=(f>=80)&(f<=12000); hi=(f>=6000)&(f<=12000)
+          total=float(P[mask].sum()); ratio=float(P[hi].sum()/total) if total else 0.0
           print('duration',len(x)/sr,'peak',peak,'saturated_samples',sat,'hf_6_12k_ratio',ratio)
-          if abs(len(x)/sr-15.0) > 1/sr: raise SystemExit('duration mismatch')
+          if abs(len(x)/sr-32.0) > 1/sr: raise SystemExit('duration mismatch')
           if peak >= 0.985 or sat: raise SystemExit('clipping/headroom failure')
           if ratio > 0.20: raise SystemExit('excess high-frequency energy')
           PY
-          ffprobe -v error -show_entries stream=codec_name,sample_rate,channels -show_entries format=duration -of default=nw=1 out/habibi_msa_coffee_ad_15s.wav
 
-      - name: Upload Habibi sample
+      - name: Upload Tunisia voice
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: habibi-msa-coffee-ad-unclipped
+          name: habibi-tunisia-reel-voice
           path: |
-            out/habibi_msa_coffee_ad_15s.wav
-            out/habibi_msa_raw.wav
-            out/copy_ar.txt
+            out/tunisia_voice_32s.wav
+            out/tunisia_raw.wav
+            out/narration_ar.txt
           if-no-files-found: warn
           retention-days: 1
 
-# trigger 5
+# tunisia reel voice

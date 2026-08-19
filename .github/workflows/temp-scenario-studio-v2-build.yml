@@ -6,11 +6,13 @@ on:
     paths:
       - '.github/workflows/temp-scenario-studio-v2-build.yml'
       - 'temp/v2build.part*'
+      - 'temp/v2fix.b64'
   pull_request:
     branches: [master]
     paths:
       - '.github/workflows/temp-scenario-studio-v2-build.yml'
       - 'temp/v2build.part*'
+      - 'temp/v2fix.b64'
   workflow_dispatch:
 
 permissions:
@@ -32,6 +34,9 @@ jobs:
           cat temp/v2build.part* | base64 -d > /tmp/scenario-v2.tar.xz
           echo '31af469d81aa8e1216e98bd33fd4b6ba9e2e1dc4dd26146d191b9538c10379ac  /tmp/scenario-v2.tar.xz' | sha256sum -c -
           tar -xJf /tmp/scenario-v2.tar.xz -C /tmp/scenario-v2
+          base64 -d temp/v2fix.b64 > /tmp/v2fix.tar.xz
+          echo '56f3a9b95649dfd81df1146c6e0f5fd00e7955fead2a83b36309eb9b153abf92  /tmp/v2fix.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/v2fix.tar.xz -C /tmp/scenario-v2
           test -f /tmp/scenario-v2/package.json
 
       - name: Install exact dependencies

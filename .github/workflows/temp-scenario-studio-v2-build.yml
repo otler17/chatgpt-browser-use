@@ -1,0 +1,64 @@
+name: Temporary Scenario Studio v2 build
+
+on:
+  push:
+    branches: [temp-scenario-studio-v2-build]
+    paths:
+      - '.github/workflows/temp-scenario-studio-v2-build.yml'
+      - 'temp/scenario-v2.part*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct Scenario Studio v2 source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/scenario-v2
+          cat temp/scenario-v2.part* | base64 -d > /tmp/scenario-v2.tar.gz
+          tar -xzf /tmp/scenario-v2.tar.gz -C /tmp/scenario-v2
+          test -f /tmp/scenario-v2/package.json
+          sha256sum /tmp/scenario-v2.tar.gz
+
+      - name: Install exact dependencies
+        working-directory: /tmp/scenario-v2
+        run: npm install --ignore-scripts=false
+
+      - name: Typecheck production package types
+        working-directory: /tmp/scenario-v2
+        run: npm run typecheck
+
+      - name: Run unit tests
+        working-directory: /tmp/scenario-v2
+        run: npm run test -- --passWithNoTests
+
+      - name: Build production bundle
+        working-directory: /tmp/scenario-v2
+        run: npm run build
+
+      - name: Record build report
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          find dist -type f -printf '%p %s bytes\n' | sort | tee build-files.txt
+          du -sh dist | tee build-size.txt
+          gzip -c dist/assets/*.js | wc -c | tee all-js-gzip-bytes.txt
+          grep -R "three" -n dist/.vite/manifest.json dist/assets 2>/dev/null | head -50 > three-references.txt || true
+          tar -czf scenario-studio-v2-build-output.tar.gz dist package-lock.json build-files.txt build-size.txt all-js-gzip-bytes.txt three-references.txt
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-studio-v2-build-output
+          path: /tmp/scenario-v2/scenario-studio-v2-build-output.tar.gz
+          retention-days: 1
+          if-no-files-found: error

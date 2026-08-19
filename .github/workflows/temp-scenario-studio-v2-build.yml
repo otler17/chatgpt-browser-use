@@ -7,21 +7,23 @@ on:
       - '.github/workflows/temp-scenario-studio-v2-build.yml'
       - 'temp/v2build.part*'
       - 'temp/v2fix.tar.xz'
+      - 'temp/e2e-*'
   pull_request:
     branches: [master]
     paths:
       - '.github/workflows/temp-scenario-studio-v2-build.yml'
       - 'temp/v2build.part*'
       - 'temp/v2fix.tar.xz'
+      - 'temp/e2e-*'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  build-and-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -37,11 +39,15 @@ jobs:
           cp temp/v2fix.tar.xz /tmp/v2fix.tar.xz
           echo '9119c953b35f48a005fd2d413c0dfcd0f4288a602d5d6249fe553bf1d899c1ec  /tmp/v2fix.tar.xz' | sha256sum -c -
           tar -xJf /tmp/v2fix.tar.xz -C /tmp/scenario-v2
+          cp temp/e2e-playwright.config.ts /tmp/scenario-v2/playwright.config.ts
+          cp temp/e2e-mock-contracts.ts /tmp/scenario-v2/tests/e2e/mock-contracts.ts
+          cp temp/e2e-app-shell.spec.ts /tmp/scenario-v2/tests/e2e/app-shell.spec.ts
+          cp temp/e2e-accessibility.spec.ts /tmp/scenario-v2/tests/e2e/accessibility.spec.ts
+          rm -f /tmp/scenario-v2/tests/e2e/smoke.spec.ts /tmp/scenario-v2/tests/e2e/a11y.spec.ts
           test -f /tmp/scenario-v2/package.json
 
       - name: Install exact dependencies
         working-directory: /tmp/scenario-v2
-        shell: bash
         run: npm install --ignore-scripts=false --legacy-peer-deps --verbose
 
       - name: Typecheck production package types
@@ -50,6 +56,15 @@ jobs:
         run: |
           set +e
           npm run typecheck 2>&1 | tee typecheck.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Run unit tests
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set +e
+          npm run test -- --run 2>&1 | tee unit-tests.log
           status=${PIPESTATUS[0]}
           exit $status
 
@@ -66,7 +81,21 @@ jobs:
         working-directory: /tmp/scenario-v2
         run: npm run performance:gate | tee performance-gate.txt
 
+      - name: Install Playwright Chromium
+        working-directory: /tmp/scenario-v2
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser and accessibility E2E
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set +e
+          npm run e2e 2>&1 | tee e2e.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
       - name: Record build report
+        if: success()
         working-directory: /tmp/scenario-v2
         shell: bash
         run: |
@@ -83,12 +112,17 @@ jobs:
           name: scenario-studio-v2-diagnostics
           path: |
             /tmp/scenario-v2/typecheck.log
+            /tmp/scenario-v2/unit-tests.log
             /tmp/scenario-v2/build.log
+            /tmp/scenario-v2/e2e.log
+            /tmp/scenario-v2/test-results
+            /tmp/scenario-v2/playwright-report
             /tmp/scenario-v2/package-lock.json
           retention-days: 1
           if-no-files-found: warn
 
       - name: Upload build output
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: scenario-studio-v2-build-output

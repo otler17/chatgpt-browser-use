@@ -1,43 +1,100 @@
-name: Temporary NAFNet RealESRGAN setup
+name: Temporary YouTube exact download
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - '.github/workflows/temp-supercar-download.yml'
-  pull_request:
-    branches: [master]
-    paths:
-      - '.github/workflows/temp-supercar-download.yml'
+  workflow_dispatch:
+    inputs:
+      youtube_url:
+        description: 'Public YouTube URL'
+        required: true
+        type: string
+      video_id:
+        description: 'YouTube video ID (used for output/artifact naming)'
+        required: true
+        type: string
+      format:
+        description: 'yt-dlp format selector'
+        required: false
+        default: '18'
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  package:
+  download:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
     steps:
-      - name: Download restoration model weights
+      - name: Validate inputs
+        shell: bash
+        env:
+          YOUTUBE_URL: ${{ inputs.youtube_url }}
+          VIDEO_ID: ${{ inputs.video_id }}
+        run: |
+          set -euxo pipefail
+          test -n "$YOUTUBE_URL"
+          test -n "$VIDEO_ID"
+          case "$VIDEO_ID" in
+            *[!A-Za-z0-9_-]*) echo "Invalid video_id" >&2; exit 2 ;;
+          esac
+
+      - name: Start Cloudflare WARP proxy
         shell: bash
         run: |
           set -euxo pipefail
-          python3 -m pip install --upgrade gdown
-          mkdir -p nafnet_bundle/experiments/pretrained_models
-          gdown 1S0PVRbyTakYY9a82kujgZLbMihfNBLfC -O nafnet_bundle/experiments/pretrained_models/NAFNet-GoPro-width64.pth
-          mkdir -p realesrgan_bundle/weights
-          wget -q 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth' -O realesrgan_bundle/weights/RealESRGAN_x4plus.pth
-          sha256sum nafnet_bundle/experiments/pretrained_models/NAFNet-GoPro-width64.pth realesrgan_bundle/weights/RealESRGAN_x4plus.pth
-          test "$(sha256sum nafnet_bundle/experiments/pretrained_models/NAFNet-GoPro-width64.pth | awk '{print $1}')" = '329d3ab4077b8d6b7ff61de376e483714667960bf85be027bf4335cda701196f'
-          test "$(sha256sum realesrgan_bundle/weights/RealESRGAN_x4plus.pth | awk '{print $1}')" = '4fa0d38905f75ac06eb49a7951b426670021be3018265fd191d2125df9d682f1'
+          docker network create warp-net || true
+          docker run -d \
+            --name warp \
+            --network warp-net \
+            -p 1080:1080 \
+            --cap-add NET_ADMIN \
+            --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+            --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+            caomingjun/warp
 
-      - name: Upload restoration bundle
+          for i in {1..20}; do
+            RESULT=$(curl -s --max-time 4 \
+              --socks5-hostname 127.0.0.1:1080 \
+              https://cloudflare.com/cdn-cgi/trace || true)
+            echo "$RESULT"
+            echo "$RESULT" | grep -qE 'warp=(on|plus)' && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Install yt-dlp and Deno
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --user -U --pre 'yt-dlp[default]'
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
+
+      - name: Download exact requested video
+        shell: bash
+        env:
+          YOUTUBE_URL: ${{ inputs.youtube_url }}
+          VIDEO_ID: ${{ inputs.video_id }}
+          FORMAT: ${{ inputs.format }}
+        run: |
+          set -euxo pipefail
+          deno --version
+          python3 -m yt_dlp \
+            --proxy 'socks5://127.0.0.1:1080' \
+            --remote-components ejs:github \
+            --js-runtimes deno \
+            --extractor-args 'youtube:player_client=web_embedded' \
+            --no-playlist \
+            -f "$FORMAT" \
+            -o "${VIDEO_ID}.%(ext)s" \
+            "$YOUTUBE_URL"
+          ls -lh "${VIDEO_ID}."*
+
+      - name: Upload exact video artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nafnet-esrgan-bundle
-          path: |
-            nafnet_bundle
-            realesrgan_bundle
+          name: ${{ inputs.video_id }}-video
+          path: ${{ inputs.video_id }}.*
           if-no-files-found: error
           retention-days: 1
-          compression-level: 0

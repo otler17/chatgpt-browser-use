@@ -5,6 +5,10 @@ on:
     branches: [master]
     paths:
       - '.github/workflows/temp-supercar-download.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/temp-supercar-download.yml'
 
 permissions:
   contents: read

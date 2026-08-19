@@ -36,7 +36,15 @@ jobs:
 
       - name: Install exact dependencies
         working-directory: /tmp/scenario-v2
-        run: npm install --ignore-scripts=false
+        shell: bash
+        run: |
+          set +e
+          npm install --ignore-scripts=false --legacy-peer-deps --verbose
+          status=$?
+          if [ $status -ne 0 ]; then
+            cat /home/runner/.npm/_logs/*-debug-0.log || true
+            exit $status
+          fi
 
       - name: Typecheck production package types
         working-directory: /tmp/scenario-v2

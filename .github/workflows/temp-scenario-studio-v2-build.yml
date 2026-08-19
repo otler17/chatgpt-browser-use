@@ -65,7 +65,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          npm run test -- --run 2>&1 | tee unit-tests.log
+          npx vitest run tests/unit 2>&1 | tee unit-tests.log
           status=${PIPESTATUS[0]}
           exit $status
 
@@ -91,7 +91,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          npm run test:e2e 2>&1 | tee e2e.log
+          npx playwright test 2>&1 | tee e2e.log
           status=${PIPESTATUS[0]}
           exit $status
 

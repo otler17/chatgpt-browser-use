@@ -1,4 +1,4 @@
-name: Temporary WMM2025 coefficient download
+name: Temporary VibeThinker split bundle
 
 on:
   push:
@@ -11,35 +11,72 @@ permissions:
   actions: read
 
 jobs:
-  download:
+  split:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Download official NOAA WMM2025 coefficients
+      - name: Download completed VibeThinker bundle from prior run
+        uses: actions/download-artifact@v4
+        with:
+          name: vibethinker-3b-q3km-sandbox
+          path: source_bundle
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: otler17/chatgpt-browser-use
+          run-id: 31974885558
+
+      - name: Split model below connector 512 MiB limit
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fL --retry 3 \
-            'https://www.ncei.noaa.gov/sites/default/files/2024-12/WMM2025COF.zip' \
-            -o WMM2025COF.zip
-          unzip -o WMM2025COF.zip -d wmm2025
-          find wmm2025 -maxdepth 2 -type f -print
-          COF=$(find wmm2025 -type f -iname 'WMM.COF' | head -n 1)
-          test -n "$COF"
-          cp "$COF" WMM.COF
-          head -n 1 WMM.COF
-          grep -Eq '^ *2025\.0 +WMM-2025 +11/13/2024' WMM.COF
-          test "$(wc -l < WMM.COF)" -eq 93
-          sha256sum WMM.COF WMM2025COF.zip > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          MODEL=$(find source_bundle -type f -name 'VibeThinker-3B.Q3_K_M.gguf' | head -n 1)
+          test -n "$MODEL"
+          mkdir -p split_parts runtime_bundle
+          split -b 400M -d -a 2 "$MODEL" split_parts/VibeThinker-3B.Q3_K_M.gguf.part.
+          cp -a source_bundle/llama_cpp runtime_bundle/
+          cp source_bundle/SHA256SUMS.txt runtime_bundle/
+          ls -lh split_parts
+          du -sh runtime_bundle
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.00
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.01
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.02
+          test -f split_parts/VibeThinker-3B.Q3_K_M.gguf.part.03
 
-      - name: Upload WMM2025 files
+      - name: Upload runtime
         uses: actions/upload-artifact@v4
         with:
-          name: wmm2025-coefficients
-          path: |
-            WMM.COF
-            WMM2025COF.zip
-            SHA256SUMS.txt
-          if-no-files-found: error
+          name: vibethinker-runtime
+          path: runtime_bundle
           retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-00
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.00
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-01
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.01
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-02
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.02
+          retention-days: 1
+          compression-level: 0
+
+      - name: Upload model part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibethinker-model-part-03
+          path: split_parts/VibeThinker-3B.Q3_K_M.gguf.part.03
+          retention-days: 1
+          compression-level: 0

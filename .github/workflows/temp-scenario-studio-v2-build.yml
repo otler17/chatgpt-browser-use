@@ -55,7 +55,12 @@ jobs:
 
       - name: Build production bundle
         working-directory: /tmp/scenario-v2
-        run: npm run build
+        shell: bash
+        run: |
+          set +e
+          npm run build 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          exit $status
 
       - name: Enforce initial bundle performance gate
         working-directory: /tmp/scenario-v2
@@ -78,6 +83,7 @@ jobs:
           name: scenario-studio-v2-diagnostics
           path: |
             /tmp/scenario-v2/typecheck.log
+            /tmp/scenario-v2/build.log
             /tmp/scenario-v2/package-lock.json
           retention-days: 1
           if-no-files-found: warn

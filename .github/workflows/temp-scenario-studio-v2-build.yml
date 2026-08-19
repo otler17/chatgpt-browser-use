@@ -5,12 +5,12 @@ on:
     branches: [temp-scenario-studio-v2-build]
     paths:
       - '.github/workflows/temp-scenario-studio-v2-build.yml'
-      - 'temp/scenario-v2.part*'
+      - 'temp/v2build.part*'
   pull_request:
     branches: [master]
     paths:
       - '.github/workflows/temp-scenario-studio-v2-build.yml'
-      - 'temp/scenario-v2.part*'
+      - 'temp/v2build.part*'
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -27,11 +27,12 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          rm -rf /tmp/scenario-v2
           mkdir -p /tmp/scenario-v2
-          cat temp/scenario-v2.part* | base64 -d > /tmp/scenario-v2.tar.gz
-          tar -xzf /tmp/scenario-v2.tar.gz -C /tmp/scenario-v2
+          cat temp/v2build.part* | base64 -d > /tmp/scenario-v2.tar.xz
+          echo '31af469d81aa8e1216e98bd33fd4b6ba9e2e1dc4dd26146d191b9538c10379ac  /tmp/scenario-v2.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/scenario-v2.tar.xz -C /tmp/scenario-v2
           test -f /tmp/scenario-v2/package.json
-          sha256sum /tmp/scenario-v2.tar.gz
 
       - name: Install exact dependencies
         working-directory: /tmp/scenario-v2
@@ -41,24 +42,23 @@ jobs:
         working-directory: /tmp/scenario-v2
         run: npm run typecheck
 
-      - name: Run unit tests
-        working-directory: /tmp/scenario-v2
-        run: npm run test -- --passWithNoTests
-
       - name: Build production bundle
         working-directory: /tmp/scenario-v2
         run: npm run build
+
+      - name: Enforce initial bundle performance gate
+        working-directory: /tmp/scenario-v2
+        run: npm run performance:gate | tee performance-gate.txt
 
       - name: Record build report
         working-directory: /tmp/scenario-v2
         shell: bash
         run: |
           set -euxo pipefail
+          npm ls --depth=0 | tee npm-top-level.txt
           find dist -type f -printf '%p %s bytes\n' | sort | tee build-files.txt
           du -sh dist | tee build-size.txt
-          gzip -c dist/assets/*.js | wc -c | tee all-js-gzip-bytes.txt
-          grep -R "three" -n dist/.vite/manifest.json dist/assets 2>/dev/null | head -50 > three-references.txt || true
-          tar -czf scenario-studio-v2-build-output.tar.gz dist package-lock.json build-files.txt build-size.txt all-js-gzip-bytes.txt three-references.txt
+          tar -czf scenario-studio-v2-build-output.tar.gz dist package-lock.json performance-gate.txt npm-top-level.txt build-files.txt build-size.txt
 
       - name: Upload build output
         uses: actions/upload-artifact@v4

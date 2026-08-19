@@ -6,6 +6,11 @@ on:
     paths:
       - '.github/workflows/temp-scenario-studio-v2-build.yml'
       - 'temp/scenario-v2.part*'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/temp-scenario-studio-v2-build.yml'
+      - 'temp/scenario-v2.part*'
   workflow_dispatch:
 
 permissions:

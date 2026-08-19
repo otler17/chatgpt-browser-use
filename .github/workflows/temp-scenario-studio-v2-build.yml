@@ -91,7 +91,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          npm run e2e 2>&1 | tee e2e.log
+          npm run test:e2e 2>&1 | tee e2e.log
           status=${PIPESTATUS[0]}
           exit $status
 

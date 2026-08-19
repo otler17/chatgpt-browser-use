@@ -35,7 +35,7 @@ jobs:
           echo '31af469d81aa8e1216e98bd33fd4b6ba9e2e1dc4dd26146d191b9538c10379ac  /tmp/scenario-v2.tar.xz' | sha256sum -c -
           tar -xJf /tmp/scenario-v2.tar.xz -C /tmp/scenario-v2
           base64 -d temp/v2fix.b64 > /tmp/v2fix.tar.xz
-          echo '56f3a9b95649dfd81df1146c6e0f5fd00e7955fead2a83b36309eb9b153abf92  /tmp/v2fix.tar.xz' | sha256sum -c -
+          echo '4594d3223fcf748298ddf87e68b1d44c2d40f67c7f348b2b29d27ff6ea018818  /tmp/v2fix.tar.xz' | sha256sum -c -
           tar -xJf /tmp/v2fix.tar.xz -C /tmp/scenario-v2
           test -f /tmp/scenario-v2/package.json
 

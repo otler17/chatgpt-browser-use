@@ -1,0 +1,46 @@
+name: Temporary Playwright bundle
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/temp-playwright-bundle.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Build portable Playwright bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p playwright-bundle/wheels playwright-bundle/ms-playwright
+          python -m pip install -U pip
+          python -m pip download --only-binary=:all: --dest playwright-bundle/wheels 'playwright==1.61.0' pytest
+          python -m pip install 'playwright==1.61.0'
+          PLAYWRIGHT_BROWSERS_PATH="$PWD/playwright-bundle/ms-playwright" python -m playwright install chromium
+          python - <<'PY'
+          from pathlib import Path
+          roots = list(Path('playwright-bundle/ms-playwright').glob('chromium-*'))
+          assert roots, 'Chromium download missing'
+          print('Chromium roots:', *roots, sep='\n')
+          PY
+          du -sh playwright-bundle
+
+      - name: Upload Playwright bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-1.61.0-python313-chromium-linux
+          path: playwright-bundle
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1

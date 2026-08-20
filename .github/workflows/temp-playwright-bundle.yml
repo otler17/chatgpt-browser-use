@@ -35,12 +35,14 @@ jobs:
           print('Chromium roots:', *roots, sep='\n')
           PY
           du -sh playwright-bundle
+          tar -czf playwright-bundle.tar.gz playwright-bundle
+          ls -lh playwright-bundle.tar.gz
 
-      - name: Upload Playwright bundle
+      - name: Upload compressed Playwright bundle
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-1.61.0-python313-chromium-linux
-          path: playwright-bundle
+          name: playwright-1.61.0-python313-chromium-linux-tgz
+          path: playwright-bundle.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 1

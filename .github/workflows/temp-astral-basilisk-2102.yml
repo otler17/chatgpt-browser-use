@@ -39,7 +39,7 @@ jobs:
           set -euxo pipefail
           mkdir wheels
           python -m pip install -U pip
-          python -m pip download --only-binary=:all: --dest wheels 'Basilisk==2.10.2'
+          python -m pip download --only-binary=:all: --dest wheels 'bsk==2.10.2'
           ls -lh wheels
           tar -czf astral-basilisk-2102-py313-linux.tar.gz wheels
       - name: Upload bundle

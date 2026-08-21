@@ -33,18 +33,17 @@ jobs:
             }
             const content = Buffer.from(`${context.runId}\n`).toString('base64');
             await github.rest.repos.createOrUpdateFileContents({owner, repo, path, sha, content, message: `Record ASTRAL Basilisk run ${context.runId}`});
-      - name: Download Basilisk runtime wheel
+      - name: Fetch verified Basilisk wheel
         shell: bash
         run: |
           set -euxo pipefail
           mkdir wheels
-          python -m pip install -U pip
-          python -m pip download --only-binary=:all: --dest wheels 'bsk==2.10.2'
-          ls -lh wheels
-          tar -czf astral-basilisk-2102-py313-linux.tar.gz wheels
-      - name: Upload bundle
+          curl -fL --retry 3 -o wheels/bsk-2.10.2-cp39-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl \
+            'https://files.pythonhosted.org/packages/b8/ce/79ddd29269c186a870fc19ebd24390701921d20a8242345df4c061a94ca7/bsk-2.10.2-cp39-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl'
+          echo 'a3a536eb45addd5c96769015765b0d66c4e0183af9c9e95020fa1cc5dedbbcbe  wheels/bsk-2.10.2-cp39-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl' | sha256sum -c -
+      - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
           name: astral-basilisk-2102-py313-linux
-          path: astral-basilisk-2102-py313-linux.tar.gz
+          path: wheels/bsk-2.10.2-cp39-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
           retention-days: 1

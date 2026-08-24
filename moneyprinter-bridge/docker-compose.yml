@@ -1,0 +1,36 @@
+services:
+  moneyprinter-api:
+    image: ghcr.io/harry0703/moneyprinterturbo:latest
+    container_name: moneyprinterturbo-api
+    command: ["python3", "main.py"]
+    volumes:
+      - ./config.toml:/MoneyPrinterTurbo/config.toml
+      - ./storage:/MoneyPrinterTurbo/storage
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+  moneyprinter-webui:
+    image: ghcr.io/harry0703/moneyprinterturbo:latest
+    container_name: moneyprinterturbo-webui
+    command:
+      ["streamlit", "run", "./webui/Main.py", "--server.address=0.0.0.0", "--server.port=8501", "--browser.serverAddress=127.0.0.1", "--server.enableCORS=True", "--browser.gatherUsageStats=False", "--client.toolbarMode=minimal", "--logger.hideWelcomeMessage=True", "--server.showEmailPrompt=False"]
+    volumes:
+      - ./config.toml:/MoneyPrinterTurbo/config.toml
+      - ./storage:/MoneyPrinterTurbo/storage
+    ports:
+      - "127.0.0.1:8501:8501"
+    restart: unless-stopped
+
+  bridge:
+    build: ./bridge
+    container_name: moneyprinterturbo-bridge
+    environment:
+      MPT_BASE_URL: http://moneyprinter-api:8080
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN:-}
+      MPT_HTTP_TIMEOUT: ${MPT_HTTP_TIMEOUT:-60}
+    depends_on:
+      - moneyprinter-api
+    ports:
+      - "${BRIDGE_HOST_BIND:-127.0.0.1}:8787:8787"
+    restart: unless-stopped

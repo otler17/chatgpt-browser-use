@@ -24,20 +24,24 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Rebuild input image
+      - name: Rebuild and verify input image
         shell: bash
         run: |
           set -euxo pipefail
           cat \
             tmp/layerd-20260827/input_00.b64 \
-            tmp/layerd-20260827/input_01.b64 \
-            tmp/layerd-20260827/input_02.b64 \
+            tmp/layerd-20260827/input_01a.b64 \
+            tmp/layerd-20260827/input_01b.b64 \
+            tmp/layerd-20260827/input_01c.b64 \
+            tmp/layerd-20260827/input_02a.b64 \
+            tmp/layerd-20260827/input_02b.b64 \
+            tmp/layerd-20260827/input_02c.b64 \
             tmp/layerd-20260827/input_03.b64 \
             tmp/layerd-20260827/input_04.b64 \
             tmp/layerd-20260827/input_05.b64 \
             | base64 -d > input.png
           file input.png
-          sha256sum input.png
+          echo '1abb722c91e5cde39119026c07b44d6d3129447062e1cd0b8f877d342a836700  input.png' | sha256sum -c -
           ls -lh input.png
 
       - name: Install LayerD
@@ -45,6 +49,7 @@ jobs:
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
+          python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
           python -m pip install 'git+https://github.com/CyberAgentAILab/LayerD.git'
 
       - name: Decompose with LayerD

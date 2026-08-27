@@ -1,0 +1,132 @@
+name: Temporary Scenario Studio v2 build
+
+on:
+  push:
+    branches: [temp-scenario-studio-v2-build]
+    paths:
+      - '.github/workflows/temp-scenario-studio-v2-build.yml'
+      - 'temp/v2build.part*'
+      - 'temp/v2fix.tar.xz'
+      - 'temp/e2e-*'
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/temp-scenario-studio-v2-build.yml'
+      - 'temp/v2build.part*'
+      - 'temp/v2fix.tar.xz'
+      - 'temp/e2e-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct Scenario Studio v2 source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf /tmp/scenario-v2
+          mkdir -p /tmp/scenario-v2
+          cat temp/v2build.part* | base64 -d > /tmp/scenario-v2.tar.xz
+          echo '31af469d81aa8e1216e98bd33fd4b6ba9e2e1dc4dd26146d191b9538c10379ac  /tmp/scenario-v2.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/scenario-v2.tar.xz -C /tmp/scenario-v2
+          cp temp/v2fix.tar.xz /tmp/v2fix.tar.xz
+          echo '9119c953b35f48a005fd2d413c0dfcd0f4288a602d5d6249fe553bf1d899c1ec  /tmp/v2fix.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/v2fix.tar.xz -C /tmp/scenario-v2
+          mkdir -p /tmp/scenario-v2/tests/e2e
+          cp temp/e2e-playwright.config.ts /tmp/scenario-v2/playwright.config.ts
+          cp temp/e2e-mock-contracts.ts /tmp/scenario-v2/tests/e2e/mock-contracts.ts
+          cp temp/e2e-app-shell.spec.ts /tmp/scenario-v2/tests/e2e/app-shell.spec.ts
+          cp temp/e2e-accessibility.spec.ts /tmp/scenario-v2/tests/e2e/accessibility.spec.ts
+          rm -f /tmp/scenario-v2/tests/e2e/smoke.spec.ts /tmp/scenario-v2/tests/e2e/a11y.spec.ts
+          test -f /tmp/scenario-v2/package.json
+
+      - name: Install exact dependencies
+        working-directory: /tmp/scenario-v2
+        run: npm install --ignore-scripts=false --legacy-peer-deps --verbose
+
+      - name: Typecheck production package types
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck 2>&1 | tee typecheck.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Run unit tests
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set +e
+          npx vitest run tests/unit 2>&1 | tee unit-tests.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Build production bundle
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set +e
+          npm run build 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Enforce initial bundle performance gate
+        working-directory: /tmp/scenario-v2
+        run: npm run performance:gate | tee performance-gate.txt
+
+      - name: Install Playwright Chromium
+        working-directory: /tmp/scenario-v2
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser and accessibility E2E
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set +e
+          npx playwright test 2>&1 | tee e2e.log
+          status=${PIPESTATUS[0]}
+          exit $status
+
+      - name: Record build report
+        if: success()
+        working-directory: /tmp/scenario-v2
+        shell: bash
+        run: |
+          set -euxo pipefail
+          npm ls --depth=0 | tee npm-top-level.txt
+          find dist -type f -printf '%p %s bytes\n' | sort | tee build-files.txt
+          du -sh dist | tee build-size.txt
+          tar -czf scenario-studio-v2-build-output.tar.gz dist package-lock.json performance-gate.txt npm-top-level.txt build-files.txt build-size.txt
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-studio-v2-diagnostics
+          path: |
+            /tmp/scenario-v2/typecheck.log
+            /tmp/scenario-v2/unit-tests.log
+            /tmp/scenario-v2/build.log
+            /tmp/scenario-v2/e2e.log
+            /tmp/scenario-v2/test-results
+            /tmp/scenario-v2/playwright-report
+            /tmp/scenario-v2/package-lock.json
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Upload build output
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-studio-v2-build-output
+          path: /tmp/scenario-v2/scenario-studio-v2-build-output.tar.gz
+          retention-days: 1
+          if-no-files-found: error

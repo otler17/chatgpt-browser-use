@@ -1,7 +1,7 @@
 {
   "origin": "https://farbi-demo-otler17-v5.trapdoor.sh",
-  "run_id": "33994826898",
-  "published_at": "2026-09-05T22:06:20.139255+00:00",
+  "run_id": "34012178044",
+  "published_at": "2026-09-06T04:44:22.485720+00:00",
   "database": "PostgreSQL 16",
   "redis": "Redis 7",
   "auth_routes": {
